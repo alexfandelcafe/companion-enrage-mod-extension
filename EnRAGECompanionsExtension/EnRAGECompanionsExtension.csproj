@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>EnRAGECompanionsExtension</AssemblyName>
+    <RootNamespace>EnRAGECompanionsExtension</RootNamespace>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.4.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="ScriptHookRDRNetAPI">
+      <HintPath>D:\Red Dead Redemption 2\ScriptHookRDRNetAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="ValidateGameApiReference" BeforeTargets="ResolveReferences">
+    <Error Condition="'D:\Red Dead Redemption 2' == ''" Text="Define RDR2GameDir with the path to your Red Dead Redemption 2 game directory." />
+    <Error Condition="!Exists('D:\Red Dead Redemption 2\ScriptHookRDRNetAPI.dll')" Text="ScriptHookRDRNetAPI.dll was not found under RDR2GameDir. Use the API DLL from your installed ScriptHookRDR2DotNet V2 build." />
+  </Target>
+</Project>
