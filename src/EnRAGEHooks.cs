@@ -5,6 +5,7 @@ using System.IO;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using RDR2;
 using RDR2.Math;
@@ -58,10 +59,24 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
-        // Individual orders are world prompts bound to the aimed-at companion. They use separate
-        // controls from the stock dismissal and medicine prompts so one prompt cannot replace another.
-        private const int IndividualOrderPromptControl = unchecked((int)0xCEFD9220);
-        private const int IndividualRestPromptControl = unchecked((int)0xDFF812F9);
+        // Keep distinct physical actions for orders: INPUT_ENTER maps to E, while the second
+        // control is a different action/key (R on the default layout). Do not register two E actions
+        // into the same entity prompt group: RDR2 can swallow or replace other prompts in that group.
+        private const int IndividualOrderPromptControl = unchecked((int)0xCEFD9220); // E
+        private const int IndividualRestPromptControl = unchecked((int)0x6D1319BE); // R
+        private const int IncapacitatedPromptControl = unchecked((int)0xCEFD9220); // E while orders are hidden
+        private const int CombatStancePromptControl = -2074855166; // H; medicine prompt is hidden during combat
+        private static int _incapacitatedPrompt;
+        private static int _incapacitatedPromptFor;
+        private static int _incapacitatedPromptGroup;
+        private static bool _incapacitatedPromptArmed;
+        private static Ped _incapacitatedPromptPed;
+        private static int _combatStancePrompt;
+        private static int _combatStancePromptFor;
+        private static int _combatStancePromptGroup;
+        private static bool _combatStancePromptArmed;
+        private static Ped _combatStancePromptPed;
+        private static string _combatStancePromptLabel;
         private static int _individualOrderPrompt;
         private static int _individualOrderPromptFor;
         private static int _individualOrderPromptGroup;
@@ -91,7 +106,28 @@ namespace EnRAGECompanionsExtension
         private static bool _enableWaitMode = true;
         private static float _waitRadius = 8.0f;
         private static int _restDurationSeconds = 60;
+        private static bool _enableInjurySystem = true;
+        private static int _injuryDamageThresholdPercent = 10;
+        private static int _injuryRecoverySeconds = 180;
+        private static int _incapacitatedHealthPercent = 35;
+        private static int _medicineHealingPercent = 100;
+        private static int _medicineRecoveryReductionSeconds = 60;
+        private static int _recruitMedicineCostCents = 100;
         private static readonly Dictionary<string, int> LastIndividualOrderTaskAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastObservedHealthById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastDamageAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastHealthSampleAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastInjuryRecoveryAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastMedicineTransactionAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> RestScenarioStartedIds =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastPlayerFireAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static Type _uiDrawType;
         private static MethodInfo _uiDrawRect;
@@ -142,9 +178,7 @@ namespace EnRAGECompanionsExtension
         private static readonly HashSet<string> PendingFullHealthIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> ExiledRosterIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static string _pendingKickRosterRecordId;
-        private const int RecruitMedicineCostCents = 100; // $1.00
-        // Use the distinct paper/interact control rather than the same key as Saludar/Provocar/
-        // Dejar de seguirme, otherwise RDR2 may suppress this second prompt in the same target group.
+        // The treatment prompt is H by default and remains separate from enRAGE's G interaction.
         private const int RecruitMedicinePromptControl = -2074855166;
 
         internal static bool IsInstalled { get { return _installed; } }
@@ -211,6 +245,7 @@ namespace EnRAGECompanionsExtension
                     Log("WARNING: for a custom faction, set RecruitGangId and RecruitRosterId to the same enRAGE faction ID so roster actions target that faction consistently.");
                 LoadPersistentRosterActions();
                 _harmony = new Harmony(HarmonyId);
+                TryPatchExtensionRecruitIntent();
                 _harmony.Patch(updateCompanion,
                     prefix: Hook(nameof(CompanionCyclePrefix)),
                     postfix: Hook(nameof(CompanionCyclePostfix)));
@@ -352,11 +387,20 @@ namespace EnRAGECompanionsExtension
                 MaintainRecruitedIdentity(__instance);
                 MaintainAffinityTravel(__instance, player);
 
-                // Keep enRAGE's original story-companion interaction. Generic NPCs use a separate
-                // native prompt, rather than mutating _askPed/_askKey and recursively re-entering UpdateAsk.
-                InvokeInstance(__instance, "UpdateAsk", player);
+                // enRAGE's stock G prompt is deliberately suspended only while its current recruit
+                // target is incapacitated. The roster association remains intact and the prompt is
+                // rebuilt by enRAGE after the companion gets up.
+                Ped stockAskTarget = GetField(__instance, "_askPed") as Ped;
+                if (stockAskTarget != null && stockAskTarget.Exists() && IsPedIncapacitatedRecruit(stockAskTarget))
+                    InvokeInstance(__instance, "HideAskPrompt");
+                else
+                    InvokeInstance(__instance, "UpdateAsk", player);
+
                 UpdateGenericRecruitPrompt(__instance, player);
+                UpdateIncapacitatedPrompt(__instance, player);
+                UpdateCombatStancePrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
+                UpdateIndividualOrderPrompts(__instance, player);
                 UpdateIndividualOrderPrompts(__instance, player);
 
                 IList list = GetField(__instance, "_comps") as IList;
@@ -370,6 +414,10 @@ namespace EnRAGECompanionsExtension
                     if (companion == null)
                         continue;
 
+                    // Inspect health/down state before the normal death marker. In enRAGE,
+                    // IsDead can coexist with IsIncapacitated; that combination is not a confirmed death.
+                    if (MaintainCompanionCondition(__instance, companion, player))
+                        continue;
                     MarkRecruitedCompanionDeath(__instance, companion);
                     // Persistent individual orders must take precedence over enRAGE's default
                     // WaitToJoin/Ride tasks, otherwise those tasks overwrite the hold/rest task.
@@ -615,14 +663,15 @@ namespace EnRAGECompanionsExtension
                 if (_uiDrawRect == null || _uiDrawText == null) return;
 
                 int affinity = Math.Max(0, Math.Min(100, state.Affinity));
-                // Draw the affinity meter inside the right-hand SENTIMIENTOS area, not in the
-                // bottom action row. Coordinates align with the profile's feelings column.
-                float x = 0.535f;
-                float width = 0.29f;
-                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.548f, 0.30f, 235, 230, 220, 255 });
-                _uiDrawRect.Invoke(null, new object[] { x, 0.572f, width, 0.010f, 26, 24, 20, 220 });
+                // The roster sheet has two columns: POSICIÓN/SENTIMIENTOS is on the left (x=.09),
+                // while NATURALEZA/INTENCIÓN/HISTORIAL is on the right (x=.52). Stay in the left
+                // feelings header band; drawing at x>=.52 places the bar over history/intention.
+                float x = 0.315f;
+                float width = 0.155f;
+                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.345f, 0.16f, 235, 230, 220, 255 });
+                _uiDrawRect.Invoke(null, new object[] { x, 0.366f, width, 0.0055f, 26, 24, 20, 220 });
                 if (affinity > 0)
-                    _uiDrawRect.Invoke(null, new object[] { x, 0.572f, width * affinity / 100f, 0.010f, 189, 153, 83, 245 });
+                    _uiDrawRect.Invoke(null, new object[] { x, 0.366f, width * affinity / 100f, 0.0055f, 189, 153, 83, 245 });
             }
             catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
         }
@@ -738,6 +787,7 @@ namespace EnRAGECompanionsExtension
             LastIndividualOrderTaskAt.Remove(id ?? string.Empty);
             if (order == CompanionFollowState.Following)
             {
+                RestScenarioStartedIds.Remove(id ?? string.Empty);
                 try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
                 SetField(companion, "State", 0);
                 SetField(companion, "AskedAt", Game.GameTime);
@@ -745,12 +795,14 @@ namespace EnRAGECompanionsExtension
             }
             else
             {
+                RestScenarioStartedIds.Remove(id ?? string.Empty);
                 try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
                 if (ped.IsOnMount)
                 {
                     try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
                 }
-                SetField(companion, "State", 0);
+                // Do not reset enRAGE's State/AskedAt for Waiting or Resting: that state is still
+                // needed by its G prompt. Our order controller suppresses the movement task itself.
                 InvokeInstance(instance, "ShowSubtitle", order == CompanionFollowState.Waiting
                     ? (GetMember(record, "Name") as string ?? "Tu compañero") + " esperará aquí."
                     : (GetMember(record, "Name") as string ?? "Tu compañero") + " descansará durante " + _restDurationSeconds + " segundos.");
@@ -844,6 +896,7 @@ namespace EnRAGECompanionsExtension
 
             if (ped.IsOnMount)
             {
+                RestScenarioStartedIds.Remove(id);
                 try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
                 return;
             }
@@ -854,13 +907,31 @@ namespace EnRAGECompanionsExtension
             float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
             if (distance > _waitRadius)
             {
+                RestScenarioStartedIds.Remove(id);
                 if (!TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD", new object[] {
                     ped.Handle, state.SavedPosition.X, state.SavedPosition.Y, state.SavedPosition.Z,
                     1.0f, 10000, state.SavedPosition.Heading, 1.0f }))
                     Log("The TASK_GO_STRAIGHT_TO_COORD wrapper was unavailable; held companion " + id + " could not return to its saved position.");
             }
+            else if (state.FollowState == CompanionFollowState.Resting)
+            {
+                // Start a genuine in-world rest scenario once. Reissuing STAND_STILL every tick
+                // cancels scenario tasks, which made Descansar look as though it did nothing.
+                if (!RestScenarioStartedIds.Contains(id))
+                {
+                    if (TryStartCompanionRestScenario(ped))
+                        RestScenarioStartedIds.Add(id);
+                    else
+                    {
+                        Log("No compatible resting scenario wrapper was found for " + id + "; using a passive wait task.");
+                        if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
+                            TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
+                    }
+                }
+            }
             else
             {
+                RestScenarioStartedIds.Remove(id);
                 if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
                     TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
             }
