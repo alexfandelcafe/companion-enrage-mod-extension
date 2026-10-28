@@ -483,7 +483,6 @@ namespace EnRAGECompanionsExtension
                 UpdateCombatStancePrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
                 UpdateIndividualOrderPrompts(__instance, player);
-                UpdateIndividualOrderPrompts(__instance, player);
 
                 IList list = GetField(__instance, "_comps") as IList;
                 if (list == null || list.Count == 0)
@@ -745,15 +744,15 @@ namespace EnRAGECompanionsExtension
                 if (_uiDrawRect == null || _uiDrawText == null) return;
 
                 int affinity = Math.Max(0, Math.Min(100, state.Affinity));
-                // The roster sheet has two columns: POSICIÓN/SENTIMIENTOS is on the left (x=.09),
-                // while NATURALEZA/INTENCIÓN/HISTORIAL is on the right (x=.52). Stay in the left
-                // feelings header band; drawing at x>=.52 places the bar over history/intention.
-                float x = 0.315f;
-                float width = 0.155f;
-                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.345f, 0.16f, 235, 230, 220, 255 });
-                _uiDrawRect.Invoke(null, new object[] { x, 0.366f, width, 0.0055f, 26, 24, 20, 220 });
+                // The left content column spans x=.09 to x=.49; keep the meter aligned with
+                // SENTIMIENTOS instead of the far-right edge where long rows/tiles read as HISTORIAL.
+                // Keep the bar compact and left-aligned to avoid drifting over the second column.
+                float x = 0.095f;
+                float width = 0.29f;
+                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.318f, 0.30f, 235, 230, 220, 255 });
+                _uiDrawRect.Invoke(null, new object[] { x, 0.339f, width, 0.0055f, 26, 24, 20, 220 });
                 if (affinity > 0)
-                    _uiDrawRect.Invoke(null, new object[] { x, 0.366f, width * affinity / 100f, 0.0055f, 189, 153, 83, 245 });
+                    _uiDrawRect.Invoke(null, new object[] { x, 0.339f, width * affinity / 100f, 0.0055f, 189, 153, 83, 245 });
             }
             catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
         }
