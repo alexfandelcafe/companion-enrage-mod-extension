@@ -1937,7 +1937,7 @@ namespace EnRAGECompanionsExtension
                     HideGenericRecruitPrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, 1980406895);
                     string promptLabel = IsCachedRecruitedPed(candidate.Handle) ? "Llamarlo" : "Cabalga conmigo";
-                object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
+                    object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
                     _genericPrompt = Convert.ToInt32(result);
                     _genericPromptFor = candidate.Handle;
                     _genericPromptGroup = group;
