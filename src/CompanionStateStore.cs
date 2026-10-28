@@ -199,8 +199,18 @@ namespace EnRAGECompanionsExtension
                 }
                 catch (Exception ex)
                 {
-                    QuarantineCorruptStateFile();
-                    Emit("Could not load companion state; started with an empty state store. Details: " + ex.Message);
+                    // Some serializer/runtime versions reject the older field set before its
+                    // missing schema can be checked. Give the explicit legacy importer one chance
+                    // before quarantining a potentially valid Version/Records save.
+                    if (TryImportLegacyStateDocument())
+                    {
+                        Emit("Migrated legacy companion state JSON into schema " + CurrentSchemaVersion + " after compatibility fallback.");
+                    }
+                    else
+                    {
+                        QuarantineCorruptStateFile();
+                        Emit("Could not load companion state; started with an empty state store. Details: " + ex.Message);
+                    }
                 }
             }
 
