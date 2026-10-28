@@ -379,12 +379,14 @@ namespace EnRAGECompanionsExtension
                 }
             }
 
-            bool waiting = (_settings.EnableWaitMode &&
-                (state.Order == CompanionOrder.Waiting || state.Order == CompanionOrder.DismissedWaiting)) ||
-                (_settings.EnableCombatStances &&
-                (state.Stance == CompanionCombatStance.HoldPosition || state.Stance == CompanionCombatStance.ProtectArea));
+            bool waiting = _settings.EnableIndividualOrders &&
+                ((_settings.EnableWaitMode &&
+                  (state.Order == CompanionOrder.Waiting || state.Order == CompanionOrder.DismissedWaiting)) ||
+                 (_settings.EnableCombatStances &&
+                  (state.Stance == CompanionCombatStance.HoldPosition || state.Stance == CompanionCombatStance.ProtectArea)));
 
-            if (_settings.EnableWaitMode && isActive && state.Order == CompanionOrder.ReturningToAnchor)
+            if (_settings.EnableIndividualOrders && _settings.EnableWaitMode &&
+                isActive && state.Order == CompanionOrder.ReturningToAnchor)
                 MaintainAnchor(id, state, ped, now, true);
             else if (waiting && (isActive || state.Order == CompanionOrder.DismissedWaiting))
                 MaintainAnchor(id, state, ped, now, false);
