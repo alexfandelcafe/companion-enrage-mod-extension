@@ -151,12 +151,13 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 
 ### Fase 3 — órdenes individuales y descanso
 
-- La ficha individual muestra `Quédate aquí` y `Descansar` cuando el compañero está activo, o `Sígueme` cuando está esperando/descansando.
+- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` cambia según el estado y `Descansar` tiene su prompt separado; los controles se distinguen del prompt `Dejar de seguirme` y del remedio.
 - `Quédate aquí` guarda coordenadas por ID estable de roster y evita que el ciclo normal `WaitToJoin/Ride` sobrescriba la tarea de espera. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
 - `Descansar` mantiene el anclaje durante `RestDurationSeconds`, luego elimina el estado de lesión persistente, restaura la salud actual y vuelve a `Following`. Tanto el temporizador como el estado se almacenan en el JSON.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
-- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode`, `WaitRadius` y `RestDurationSeconds` al INI autogenerado y al ejemplo. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
+- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode`, `WaitRadius` y `RestDurationSeconds` al INI autogenerado y al ejemplo. La afinidad se dibuja en la zona `SENTIMIENTOS` en lugar de la fila de botones.
+- Los registros de extensión con `TimesKilledPlayer=0` se corrigen para no heredar `Origin=Killed` por defecto, que provocaba el texto falso `te mató`. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
 
 ### Pendiente y verificación
 
