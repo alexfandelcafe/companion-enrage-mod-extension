@@ -1,0 +1,13 @@
+﻿; Copy to scripts/EnRAGECompanionsExtension.ini or let the plugin create it.
+MaxCompanions=3
+; Existing enRAGE faction ID to assign to recruited NPCs. Default: Van der Linde (vdl).
+; For a custom faction, use its exact ID from enRAGE's faction definition.
+RecruitGangId=vdl
+; For custom factions, set this to the same ID as RecruitGangId.
+; vdl is special: it mirrors recruits into enRAGE's built-in Van der Linde StoryRoster.
+; Other existing factions use the normal Roster list filtered by Gang ID.
+RecruitRosterId=vdl
+; True permits friendly fire; false blocks player targeting of recruited members.
+AllowFriendlyFire=true
+; Force the grey/disabled target dot even when friendly fire is enabled.
+PreventTargeting=false
