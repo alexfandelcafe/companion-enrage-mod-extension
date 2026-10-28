@@ -43,7 +43,7 @@ Este documento resume las protecciones heredadas y las limitaciones de la rama `
 
 - Las posturas se conservan en el estado persistente. Los filtros se aplican a los reclutas de la extensión, no globalmente.
 - «Fuego a mi señal» depende de consultar el estado de disparo del jugador. Si el wrapper no está disponible, el sistema falla de forma conservadora y no autoriza la ofensiva.
-- La afinidad está limitada a 0–100 y sus incrementos de viaje, combate y tratamiento tienen límites temporales o de evento.
+- La afinidad está limitada a 0–100 y sus incrementos de viaje, combate y tratamiento tienen límites temporales o de evento. El viaje requiere el tiempo configurado, al menos 50 m de movimiento acumulado mientras el compañero está activo y cerca, y que no haya combate.
 - La ficha presenta la afinidad como acción seleccionable `Confianza: n/100` y muestra el dato en un subtítulo. No se ha alterado el método gráfico `RosterMenu.DrawDetail()`.
 
 ## Limitaciones pendientes
