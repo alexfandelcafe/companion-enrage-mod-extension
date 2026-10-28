@@ -195,7 +195,13 @@ namespace EnRAGECompanionsExtension
             LastAnchorTaskAt.Remove(id);
             TryClearTasks(ped);
             TrySetBlockingEvents(ped, true);
-            if (!ped.IsOnMount)
+            if (ped.IsOnMount)
+            {
+                // Retain the mount entity but let the released companion settle on foot near the saved anchor.
+                try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); }
+                catch (Exception ex) { _log("Dismissed companion dismount warning for " + id + ": " + ex.Message); }
+            }
+            else
                 TryStandStill(ped, id);
             Save();
         }
