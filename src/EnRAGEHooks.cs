@@ -2626,6 +2626,9 @@ namespace EnRAGECompanionsExtension
                 try { CommitRosterRecord(__instance, rosterRecord ?? trackedRecord, newlyCreatedRosterRecord, ped.Handle); }
                 catch (Exception ex) { Log("Roster membership update warning: " + Unwrap(ex)); }
                 CacheRosterRecord(ped.Handle, modelHash, rosterRecord ?? trackedRecord, ped);
+                // Both first-time recruitment and prompt-based recall must leave the persistent
+                // individual order in Following; a dismissed state must not survive re-adoption.
+                SetPersistentFollowState(rosterRecord ?? trackedRecord, CompanionFollowState.Following, null);
                 PreserveRecruitOutfit(rosterRecord ?? trackedRecord, ped);
                 ApplyRecruitedPedIdentity(__instance, rosterRecord ?? trackedRecord, ped);
                 SetField(__instance, "_askPed", null);
