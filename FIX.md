@@ -151,13 +151,13 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 
 ### Fase 3 — órdenes individuales y descanso
 
-- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` usa el control de contexto secundario (F en el esquema predeterminado) y `Descansar` usa R; E se reserva para ayudar a levantarse estando incapacitado. Esto evita reutilizar E en las órdenes normales mientras se preserva el prompt nativo G.
+- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` usa el control de contexto secundario (F en el esquema predeterminado) y `Descansar` usa R; E se reserva para ayudar a levantarse estando incapacitado. Esto evita reutilizar E en las órdenes normales. Durante espera/descanso se conserva `State=1` para que el prompt nativo G siga existiendo, mientras el controlador propio evita que la tarea `Ride` anule la orden.
 - `Quédate aquí` guarda coordenadas por ID estable de roster y evita que el ciclo normal `WaitToJoin/Ride` sobrescriba la tarea de espera. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
-- `Descansar` mantiene el anclaje durante `RestDurationSeconds`, intenta iniciar una escena de sentarse una sola vez, y vuelve a `Following` al terminar. La curación/limpieza de lesión depende de `RestHealsInjuries`. Si la API no expone el wrapper de escenario, se conserva el fallback de espera pasiva.
+- `Descansar` mantiene el anclaje durante `RestDurationSeconds`, intenta iniciar una escena de sentarse una sola vez, usando también el nativo directo como fallback, y vuelve a `Following` al terminar. La curación/limpieza de lesión depende de `RestHealsInjuries`. Si la API no expone el wrapper de escenario, se conserva el fallback de espera pasiva.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
-- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode`, `WaitRadius` y `RestDurationSeconds` al INI autogenerado y al ejemplo. La afinidad se dibuja en la zona `SENTIMIENTOS` del perfil, fuera de la fila de botones.
-- Los registros de extensión con `TimesKilledPlayer=0` se corrigen para no heredar `Origin=Killed` por defecto, que provocaba el texto falso `te mató`. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
+- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode`, `WaitRadius` y `RestDurationSeconds` al INI autogenerado y al ejemplo. La afinidad se dibuja junto al encabezado real `SENTIMIENTOS`, leyendo sus coordenadas en cada dibujo para no superponerse al historial cuando varía la altura del perfil.
+- Los registros de extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE y no es neutral. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
 
 ### Fase 4 — heridas e incapacitación
 
