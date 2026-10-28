@@ -26,11 +26,12 @@ namespace EnRAGECompanionsExtension
 
         public event Action<string> Diagnostic;
 
-        public CompanionStateStore(string scriptsDirectory)
+        public CompanionStateStore(string scriptsDirectory, Action<string> diagnostic = null)
         {
             if (string.IsNullOrWhiteSpace(scriptsDirectory))
                 throw new ArgumentException("Scripts directory is required.", nameof(scriptsDirectory));
 
+            if (diagnostic != null) Diagnostic += diagnostic;
             Directory.CreateDirectory(scriptsDirectory);
             _statePath = Path.Combine(scriptsDirectory, StateFileName);
             _legacyOutfitPath = Path.Combine(scriptsDirectory, LegacyOutfitFileName);
@@ -43,6 +44,9 @@ namespace EnRAGECompanionsExtension
         public CompanionPersistentState GetOrCreate(string recordId)
         {
             string id = NormalizeId(recordId);
+            if (id.Length == 0)
+                throw new ArgumentException("Persistent companion state requires a record ID.", nameof(recordId));
+
             CompanionPersistentState state;
             if (_states.TryGetValue(id, out state))
                 return state;
@@ -167,21 +171,31 @@ namespace EnRAGECompanionsExtension
                     if (document == null)
                         throw new InvalidDataException("State document was empty.");
 
-                    if (document.SchemaVersion < 1 || document.SchemaVersion > CurrentSchemaVersion)
-                        throw new InvalidDataException("Unsupported companion state schema version: " + document.SchemaVersion);
-
-                    if (document.Companions != null)
+                    // Older development builds used {"Version":1,"Records":[...]}. Detect and
+                    // import that documented legacy shape before treating a missing SchemaVersion
+                    // as corruption; keep the original file intact until the migrated JSON is saved.
+                    if (document.SchemaVersion == 0 && TryImportLegacyStateDocument())
                     {
-                        foreach (CompanionPersistentState state in document.Companions)
-                        {
-                            if (state == null) continue;
-                            string id = NormalizeId(state.RecordId);
-                            if (id.Length == 0) continue;
-                            state.Normalize(id);
-                            _states[id] = state;
-                        }
+                        Emit("Migrated legacy companion state JSON into schema " + CurrentSchemaVersion + ".");
                     }
-                    Emit("Loaded " + _states.Count + " companion state record(s), schema " + document.SchemaVersion + ".");
+                    else
+                    {
+                        if (document.SchemaVersion < 1 || document.SchemaVersion > CurrentSchemaVersion)
+                            throw new InvalidDataException("Unsupported companion state schema version: " + document.SchemaVersion);
+
+                        if (document.Companions != null)
+                        {
+                            foreach (CompanionPersistentState state in document.Companions)
+                            {
+                                if (state == null) continue;
+                                string id = NormalizeId(state.RecordId);
+                                if (id.Length == 0) continue;
+                                state.Normalize(id);
+                                _states[id] = state;
+                            }
+                        }
+                        Emit("Loaded " + _states.Count + " companion state record(s), schema " + document.SchemaVersion + ".");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -192,6 +206,86 @@ namespace EnRAGECompanionsExtension
 
             // Migration is additive: the old file is read but never deleted or rewritten.
             ImportLegacyOutfits();
+        }
+
+        private bool TryImportLegacyStateDocument()
+        {
+            try
+            {
+                var serializer = new DataContractJsonSerializer(typeof(LegacyCompanionStateDocument));
+                LegacyCompanionStateDocument legacy;
+                using (var stream = new FileStream(_statePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    legacy = serializer.ReadObject(stream) as LegacyCompanionStateDocument;
+
+                if (legacy == null || legacy.Version < 1 || legacy.Records == null)
+                    return false;
+
+                foreach (LegacyCompanionStateRecord old in legacy.Records)
+                {
+                    if (old == null) continue;
+                    string id = NormalizeId(old.Id);
+                    if (id.Length == 0) continue;
+
+                    CompanionPersistentState state;
+                    if (!_states.TryGetValue(id, out state))
+                        state = new CompanionPersistentState();
+
+                    state.RecordId = id;
+                    state.RosterOrder = old.Order;
+                    if (Enum.IsDefined(typeof(CompanionCombatStance), old.Stance))
+                        state.CombatStance = (CompanionCombatStance)old.Stance;
+                    if (Enum.IsDefined(typeof(CompanionMountPreference), old.MountPolicy))
+                        state.MountPreference = (CompanionMountPreference)old.MountPolicy;
+
+                    state.SavedPosition = new CompanionSavedPosition
+                    {
+                        HasValue = old.HasAnchor,
+                        X = old.AnchorX,
+                        Y = old.AnchorY,
+                        Z = old.AnchorZ,
+                        Heading = 0f
+                    };
+
+                    int severity = old.InjurySeverity < 0 ? 0 : (old.InjurySeverity > 100 ? 100 : old.InjurySeverity);
+                    state.Injury = new CompanionInjuryState
+                    {
+                        IsInjured = severity > 0 || old.InjuryStartedUtcTicks > 0,
+                        Severity = severity,
+                        RecoverySecondsRemaining = 0,
+                        FirstInjuredUtcTicks = old.InjuryStartedUtcTicks
+                    };
+                    state.RestStartedUtcTicks = old.RestStartedUtcTicks;
+                    state.Affinity = old.Affinity;
+
+                    if (state.Appearance == null)
+                        state.Appearance = new CompanionAppearanceState();
+                    if (old.MetaOutfitHash != 0U)
+                    {
+                        state.Appearance.HasLegacyOutfitHash = true;
+                        state.Appearance.LegacyOutfitHash = old.MetaOutfitHash;
+                    }
+                    if (old.ClothingComponents != null && old.ClothingComponents.Count > 0)
+                        state.Appearance.ClothingComponents = old.ClothingComponents;
+                    if (old.HatComponentHash != 0U)
+                        state.Appearance.HatComponentHash = old.HatComponentHash;
+                    if (old.LongGunHash != 0U && !state.Appearance.WeaponHashes.Contains(old.LongGunHash))
+                        state.Appearance.WeaponHashes.Add(old.LongGunHash);
+                    if (old.SidearmHash != 0U && !state.Appearance.WeaponHashes.Contains(old.SidearmHash))
+                        state.Appearance.WeaponHashes.Add(old.SidearmHash);
+
+                    state.Normalize(id);
+                    _states[id] = state;
+                }
+
+                _dirty = true;
+                Emit("Imported " + _states.Count + " legacy companion state record(s) from Version/Records format.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Emit("Legacy companion state migration failed: " + ex.Message);
+                return false;
+            }
         }
 
         private void ImportLegacyOutfits()
@@ -212,7 +306,7 @@ namespace EnRAGECompanionsExtension
                     uint hash;
                     if (id.Length == 0 || !uint.TryParse(hashText,
                         System.Globalization.NumberStyles.HexNumber,
-                        System.Globalization.CultureInfo.InvariantCulture, out hash))
+                        System.Globalization.CultureInfo.InvariantCulture, out hash) || hash == 0U)
                         continue;
 
                     CompanionPersistentState state = GetOrCreate(id);
@@ -274,6 +368,35 @@ namespace EnRAGECompanionsExtension
             try { handler(message); }
             catch { /* Diagnostics must never break persistence. */ }
         }
+    }
+
+    [System.Runtime.Serialization.DataContract]
+    internal sealed class LegacyCompanionStateDocument
+    {
+        [System.Runtime.Serialization.DataMember(Name = "Version", Order = 1)] public int Version { get; set; }
+        [System.Runtime.Serialization.DataMember(Name = "Records", Order = 2)] public List<LegacyCompanionStateRecord> Records { get; set; }
+    }
+
+    [System.Runtime.Serialization.DataContract]
+    internal sealed class LegacyCompanionStateRecord
+    {
+        [System.Runtime.Serialization.DataMember] public string Id { get; set; }
+        [System.Runtime.Serialization.DataMember] public int Order { get; set; }
+        [System.Runtime.Serialization.DataMember] public int Stance { get; set; }
+        [System.Runtime.Serialization.DataMember] public int MountPolicy { get; set; }
+        [System.Runtime.Serialization.DataMember] public bool HasAnchor { get; set; }
+        [System.Runtime.Serialization.DataMember] public float AnchorX { get; set; }
+        [System.Runtime.Serialization.DataMember] public float AnchorY { get; set; }
+        [System.Runtime.Serialization.DataMember] public float AnchorZ { get; set; }
+        [System.Runtime.Serialization.DataMember] public int InjurySeverity { get; set; }
+        [System.Runtime.Serialization.DataMember] public long InjuryStartedUtcTicks { get; set; }
+        [System.Runtime.Serialization.DataMember] public long RestStartedUtcTicks { get; set; }
+        [System.Runtime.Serialization.DataMember] public int Affinity { get; set; }
+        [System.Runtime.Serialization.DataMember] public uint MetaOutfitHash { get; set; }
+        [System.Runtime.Serialization.DataMember] public List<CompanionClothingComponent> ClothingComponents { get; set; }
+        [System.Runtime.Serialization.DataMember] public uint HatComponentHash { get; set; }
+        [System.Runtime.Serialization.DataMember] public uint LongGunHash { get; set; }
+        [System.Runtime.Serialization.DataMember] public uint SidearmHash { get; set; }
     }
 
     [System.Runtime.Serialization.DataContract]
