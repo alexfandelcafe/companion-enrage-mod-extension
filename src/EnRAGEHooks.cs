@@ -170,6 +170,11 @@ namespace EnRAGECompanionsExtension
                     !UsesVanDerLindeStoryRoster())
                     Log("WARNING: for a custom faction, set RecruitGangId and RecruitRosterId to the same enRAGE faction ID so roster actions target that faction consistently.");
                 LoadPersistentRosterActions();
+                CompanionSystems.Initialize(
+                    ResolveScriptsFile("EnRAGECompanionsExtension.companions.json"),
+                    ResolveScriptsFile("EnRAGECompanionsExtension.outfits.txt"),
+                    ResolveScriptsFile("EnRAGECompanionsExtension.ini"),
+                    Log);
                 _harmony = new Harmony(HarmonyId);
                 _harmony.Patch(updateCompanion,
                     prefix: Hook(nameof(CompanionCyclePrefix)),
@@ -314,6 +319,18 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(__instance, "UpdateAsk", player);
                 UpdateGenericRecruitPrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
+                UpdateCompanionOrdersPrompt(__instance, player);
+
+                foreach (KeyValuePair<int, CachedRosterRecord> tracked in RosterRecordsByPedHandle.ToArray())
+                {
+                    CachedRosterRecord cached = tracked.Value;
+                    Ped trackedPed = cached == null ? null : cached.Ped;
+                    string trackedId = cached == null || cached.Record == null ? null : GetMember(cached.Record, "Id") as string;
+                    if (string.IsNullOrWhiteSpace(trackedId) || trackedPed == null || !trackedPed.Exists() || trackedPed.IsDead)
+                        continue;
+                    CompanionSystems.Tick(trackedId, trackedPed, player,
+                        IsExtensionCompanionActiveForPed(__instance, trackedPed.Handle));
+                }
 
                 IList list = GetField(__instance, "_comps") as IList;
                 if (list == null || list.Count == 0)
@@ -327,6 +344,16 @@ namespace EnRAGECompanionsExtension
                         continue;
 
                     MarkRecruitedCompanionDeath(__instance, companion);
+                    object companionRecord = GetField(companion, "Rec");
+                    string companionRecordId = GetMember(companionRecord, "Id") as string;
+                    if (CompanionSystems.ShouldOverrideEnRAGECycle(companionRecordId))
+                    {
+                        CompanionCombatStance stance = CompanionSystems.GetStance(companionRecordId);
+                        if (stance == CompanionCombatStance.HoldPosition || stance == CompanionCombatStance.ProtectArea)
+                            MaintainRetaliatoryCombat(__instance, companion, player);
+                        continue;
+                    }
+
                     int state = GetFieldInt(companion, "State", -1);
                     switch (state)
                     {
@@ -1001,7 +1028,12 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(id)) return;
 
             uint savedHash;
-            if (RecruitedOutfitHashes.TryGetValue(id, out savedHash) && savedHash != 0U)
+            if (!RecruitedOutfitHashes.TryGetValue(id, out savedHash) || savedHash == 0U)
+            {
+                if (CompanionSystems.TryGetMetaOutfitHash(id, out savedHash) && savedHash != 0U)
+                    RecruitedOutfitHashes[id] = savedHash;
+            }
+            if (savedHash != 0U)
             {
                 ApplySavedRecruitOutfit(record, ped);
                 return;
@@ -1027,6 +1059,7 @@ namespace EnRAGECompanionsExtension
 
             OutfitCaptureFailureLogged.Remove(id);
             RecruitedOutfitHashes[id] = outfitHash;
+            CompanionSystems.SetMetaOutfitHash(id, outfitHash);
             SavePersistentRecruitOutfits();
             Log("Saved outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
                 (GetMember(record, "Name") as string ?? id) + " (record=" + id + ").");
@@ -1037,8 +1070,14 @@ namespace EnRAGECompanionsExtension
             if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             uint outfitHash;
-            if (string.IsNullOrWhiteSpace(id) || !RecruitedOutfitHashes.TryGetValue(id, out outfitHash) || outfitHash == 0U)
+            if (string.IsNullOrWhiteSpace(id))
                 return;
+            if (!RecruitedOutfitHashes.TryGetValue(id, out outfitHash) || outfitHash == 0U)
+            {
+                if (!CompanionSystems.TryGetMetaOutfitHash(id, out outfitHash) || outfitHash == 0U)
+                    return;
+                RecruitedOutfitHashes[id] = outfitHash;
+            }
 
             try
             {
@@ -3328,6 +3367,7 @@ namespace EnRAGECompanionsExtension
             if (companion == null) return;
             string name = GetField(companion, "Name") as string ?? "Tu aliado";
             string key = GetField(companion, "Key") as string;
+            string rosterRecordId = GetMember(GetField(companion, "Rec"), "Id") as string;
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             bool preserveHorse = false;
@@ -3355,23 +3395,11 @@ namespace EnRAGECompanionsExtension
                 try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
                 try { ped.RelationshipGroup = EnsurePersistentRecruitRelationshipGroup(player); } catch { }
                 ApplyAmbientReleasedCombatProfile(ped);
-                AmbientReleasedRecruitPeds.Add(ped.Handle);
+                AmbientReleasedRecruitPeds.Remove(ped.Handle);
+                AmbientReleasedWanderAt.Remove(ped.Handle);
                 CustomCompanionCombatTargets.Remove(ped.Handle);
                 CustomCombatSuppressedAt.Remove(ped.Handle);
-                try
-                {
-                    if (ped.IsOnMount)
-                    {
-                        TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0);
-                        AmbientReleasedWanderAt[ped.Handle] = Game.GameTime + 1800;
-                    }
-                    else
-                    {
-                        TASK.TASK_WANDER_STANDARD(ped.Handle, 10f, 10);
-                        AmbientReleasedWanderAt.Remove(ped.Handle);
-                    }
-                }
-                catch (Exception ex) { Log("Ambient release task warning: " + Unwrap(ex)); }
+                CompanionSystems.OnDismissed(rosterRecordId, ped);
             }
 
             IList comps = GetField(instance, "_comps") as IList;
