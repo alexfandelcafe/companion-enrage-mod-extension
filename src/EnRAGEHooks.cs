@@ -444,7 +444,7 @@ namespace EnRAGECompanionsExtension
             if (target != null && IsCachedRecruitedPed(target.Handle))
             {
                 // Released recruits remain eligible for a direct "call back" prompt.
-                _preferredGenericPed = IsEligibleReleasedRecruitForRecall(__instance, player, target) ? target : null;
+                _preferredGenericPed = target;
                 InvokeInstance(__instance, "UpdateHatAnim", player);
                 InvokeInstance(__instance, "HideSocialPrompt");
                 return false;
@@ -1906,7 +1906,8 @@ namespace EnRAGECompanionsExtension
                 }
 
                 Ped candidate = null;
-                if (_preferredGenericPed != null && _preferredGenericPed.Exists())
+                bool hasPreferredTarget = _preferredGenericPed != null && _preferredGenericPed.Exists();
+                if (hasPreferredTarget)
                 {
                     if (IsCachedRecruitedPed(_preferredGenericPed.Handle))
                     {
@@ -1919,7 +1920,7 @@ namespace EnRAGECompanionsExtension
                     }
                 }
                 _preferredGenericPed = null;
-                if (candidate == null)
+                if (candidate == null && !hasPreferredTarget)
                     candidate = FindCandidate(instance, player);
                 if (candidate == null || !candidate.Exists())
                 {
