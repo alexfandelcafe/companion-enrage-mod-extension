@@ -882,8 +882,11 @@ namespace EnRAGECompanionsExtension
                 {
                     try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
                 }
-                // Do not reset enRAGE's State/AskedAt for Waiting or Resting: that state is still
-                // needed by its G prompt. Our order controller suppresses the movement task itself.
+                // enRAGE only creates its stock G prompt when the companion wrapper is State=1.
+                // Keep the wrapper active so Dejar de seguirme remains available; the cycle controller
+                // suppresses Ride and applies our hold/rest task instead of letting it mount/follow.
+                SetField(companion, "State", 1);
+                SetField(companion, "AskedAt", Game.GameTime);
                 InvokeInstance(instance, "ShowSubtitle", order == CompanionFollowState.Waiting
                     ? (GetMember(record, "Name") as string ?? "Tu compañero") + " esperará aquí."
                     : (GetMember(record, "Name") as string ?? "Tu compañero") + " descansará durante " + _restDurationSeconds + " segundos.");
@@ -1027,6 +1030,18 @@ namespace EnRAGECompanionsExtension
             object[] fourArgs = new object[] { ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1, true };
             if (TryInvokeNativeWrapper(typeof(TASK), "TASK_START_SCENARIO_IN_PLACE", fourArgs))
                 return true;
+            object[] sevenArgs = new object[] { ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1, true, false, 0, false };
+            if (TryInvokeNativeWrapper(typeof(TASK), "TASK_START_SCENARIO_IN_PLACE", sevenArgs))
+                return true;
+            // Some ScriptHook builds do not expose the wrapper despite the native being available.
+            // Use the RDR2 native as a final fallback, with the full native signature.
+            try
+            {
+                Function.Call(0x142A02425FF02BD9UL, new InputArgument[] {
+                    ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1, true, false, 0, false });
+                return true;
+            }
+            catch (Exception ex) { Log("Direct resting scenario native failed: " + Unwrap(ex)); }
             object[] threeArgs = new object[] { ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1 };
             if (TryInvokeNativeWrapper(typeof(TASK), "TASK_START_SCENARIO_IN_PLACE", threeArgs))
                 return true;
@@ -2612,7 +2627,8 @@ namespace EnRAGECompanionsExtension
             bool changed = false;
             object origin = GetMember(record, "Origin");
             if (!string.Equals(origin == null ? string.Empty : origin.ToString(), "GangMember", StringComparison.OrdinalIgnoreCase))
-                changed |= SetEnumMember(record, "Origin", "GangMember");
+                changed |= SetEnumMember(record, "Origin", "Greeted");
+                changed |= SetMember(record, "CanHunt", false);
             string location = GetMember(record, "KillLocation") as string;
             if (!string.IsNullOrEmpty(location)) changed |= SetMember(record, "KillLocation", string.Empty);
             object killedAt = GetMember(record, "KilledPlayerAt");
@@ -4512,7 +4528,10 @@ namespace EnRAGECompanionsExtension
             SetMember(created, "KilledPlayerAt", DateTime.MinValue);
             SetMember(created, "TimesKilledPlayer", 0);
             SetMember(created, "KilledByPlayer", false);
-            SetEnumMember(created, "Origin", "GangMember");
+            // GangMember explicitly maps to Intent.Hunts in enRAGE, so it is not a neutral origin.
+            // Greeted plus CanHunt=false prevents both a fabricated kill-history marker and "te da caza".
+            SetEnumMember(created, "Origin", "Greeted");
+            SetMember(created, "CanHunt", false);
             SetMember(created, "FormerGang", null);
             SetMember(created, "Affiliation", null);
             SetMember(created, "BossId", null);
