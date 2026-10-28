@@ -68,7 +68,7 @@ RestDurationSeconds=60
 - `AffinityTravelIntervalSeconds`: seconds between travel checks (clamped to 30–7200). Travel gain is awarded when the companion remains nearby and the player has moved at least 100 metres during the interval.
 - `AffinityTravelGain`, `AffinityCombatGain`, `AffinityTreatmentGain`: gains for travel, combat (at most once per 30 seconds of an encounter), and a successful paid treatment. Affinity is clamped to 0–100. The detail sheet also exposes explicit `Mejorar afinidad (+10)` and `Reducir afinidad (-10)` actions for controlled testing.
 - `EnableAppearancePersistence` and `PreserveSavedOutfit`: capture and reapply a saved meta-ped outfit hash when RDR2 exposes a non-zero hash. Recalled NPCs in the same session are re-adopted as the same pedestrian whenever the runtime cache still has that entity.
-- `EnableIndividualOrders`: injects per-recruit orders in the existing roster detail sheet. Active recruits expose `Quédate aquí` and `Descansar`; a waiting/resting recruit exposes `Sígueme`.
+- `EnableIndividualOrders`: enables contextual order prompts when aiming at an active extension companion. The prompts are separate from `Dejar de seguirme`; the roster detail sheet no longer contains individual orders.
 - `EnableWaitMode`: controls `Quédate aquí`; when enabled the companion returns to the saved anchor if it exceeds `WaitRadius`, then remains there instead of running enRAGE's default follow task.
 - `WaitRadius`: radius in metres around the saved wait/rest position (clamped to 1–50 m; default 8).
 - `RestDurationSeconds`: timed rest before automatic return to follow mode and full-health recovery (clamped to 10–3600 seconds; default 60). The timer and resting state are stored by stable roster ID.
@@ -133,19 +133,20 @@ La rama `phase2-persistent-companion-state` añade la base de persistencia versi
 
 Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Conserva los datos por el ID persistente del registro, nunca por el handle temporal del ped. El archivo antiguo `scripts/EnRAGECompanionsExtension.outfits.txt` se lee en formato `ID|HASH_HEXADECIMAL`; la migración no lo elimina ni lo reescribe. Los datos antiguos se importan solo cuando el registro nuevo aún no contiene un hash de outfit.
 
-Esta revisión ya conecta la afinidad (barra de ficha y cambios por viaje, combate y tratamiento) y la persistencia del hash de vestimenta con los hooks de juego. La base de estado también conserva datos anteriores de postura, preferencia de montura, posición y lesión al migrar el formato antiguo; esos campos no deben considerarse funcionales en el juego solo por existir en el JSON. La persistencia de componentes de ropa, sombrero y armas sigue pendiente porque necesita natives compatibles y verificación dentro de RDR2.
+Esta revisión ya conecta la afinidad (barra en la zona de sentimientos de la ficha y cambios por viaje, combate y tratamiento) y la persistencia del hash de vestimenta con los hooks de juego. La base de estado también conserva datos anteriores de postura, preferencia de montura, posición y lesión al migrar el formato antiguo; esos campos no deben considerarse funcionales en el juego solo por existir en el JSON. La persistencia de componentes de ropa, sombrero y armas sigue pendiente porque necesita natives compatibles y verificación dentro de RDR2.
 
 El esquema actual es la versión 1. El formato de desarrollo anterior `{"Version":1,"Records":[...]}` se importa a `SchemaVersion/Companions` sin descartar afinidad, postura, preferencia de montura, posición guardada, lesión, temporizador de descanso ni hashes de apariencia válidos. Los JSON que sí sean ilegibles o incompatibles se apartan con sufijo `.corrupt-<fecha>` para conservarlos y el almacén intenta recuperar los hashes del archivo antiguo. El guardado se realiza al detectar cambios o migración, no en cada frame.
 
 
 ## Fase 3 — órdenes individuales y descanso
 
-La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de sustituir el sistema de reclutamiento. Las acciones aparecen en la ficha del registro individual:
+La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de sustituir el sistema de reclutamiento. Al apuntar a un compañero activo aparecen prompts contextuales:
 
 - `Quédate aquí`: guarda la posición actual del compañero, lo baja del caballo si corresponde y mantiene su IA de espera separada del ciclo `WaitToJoin/Ride`. Si sale del radio configurado, recibe una tarea para regresar al punto guardado.
 - `Sígueme`: elimina el anclaje de espera/descanso, restablece el estado persistente a `Following` y devuelve el control de movimiento al ciclo normal de enRAGE.
 - `Descansar`: mantiene al compañero en la posición guardada durante `RestDurationSeconds`; al finalizar, limpia el estado de lesión persistente, restaura su salud y reanuda el seguimiento.
-- La orden se guarda por ID estable de roster, no por handle del ped. `Dejar de seguirme` conserva su función de liberar al NPC, y `Llamarlo` vuelve a ponerlo en estado `Following`.
+- Los prompts de órdenes se mantienen separados de `Dejar de seguirme` y del remedio, y no se agregan botones de órdenes a la ficha. La orden se guarda por ID estable de roster, no por handle del ped; `Llamarlo` vuelve a ponerlo en estado `Following`.
+- Los registros nuevos y antiguos de la extensión se normalizan para que el valor por defecto de `Origin` (`Killed`) no invente el antecedente `te mató` cuando `TimesKilledPlayer` es cero. Los registros con un contador real de muertes no se alteran.
 - La llamada desde la ficha ya no fuerza una tarea de montar al caballo después de `Adopt`; enRAGE conserva el control de sus tareas de aproximación/seguimiento.
 
 Las órdenes y el temporizador quedan implementados a nivel de código fuente, pero requieren validar en RDR2 la firma de los wrappers nativos de movimiento y el comportamiento del compañero montado. Esta revisión tampoco modifica `main` ni fusiona el PR.
