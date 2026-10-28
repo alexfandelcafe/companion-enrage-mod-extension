@@ -17,6 +17,7 @@ namespace EnRAGECompanionsExtension
         private static CompanionExtensionSettings _settings = new CompanionExtensionSettings();
         private static Action<string> _log = delegate { };
         private static readonly Dictionary<string, int> LastPedHealth = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastPedHandle = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastRecordTick = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> DamageWindowStartedAt = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> DamageWindowTotal = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -27,6 +28,7 @@ namespace EnRAGECompanionsExtension
         private static readonly Dictionary<string, int> LastCombatTarget = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, long> LastCombatAffinityUtc = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> MoveRateApplied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> MoveRatePedHandles = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static MethodInfo _moveRateNative;
         private static MethodInfo _shootingNative;
         private static MethodInfo _standStillNative;
@@ -318,6 +320,22 @@ namespace EnRAGECompanionsExtension
             }
 
             int now = Game.GameTime;
+            int observedHandle;
+            if (!LastPedHandle.TryGetValue(id, out observedHandle) || observedHandle != ped.Handle)
+            {
+                // A respawn is a new physical entity; do not interpret the difference from the
+                // previous ped's health as fresh damage to the persistent companion record.
+                LastPedHandle[id] = ped.Handle;
+                LastPedHealth[id] = ped.Health;
+                LastRecordTick[id] = now;
+                LastTravelTick[id] = now;
+                TravelAccumulatorMs[id] = 0;
+                DamageWindowStartedAt.Remove(id);
+                DamageWindowTotal.Remove(id);
+                LastAnchorTaskAt.Remove(id);
+                LastStandStillPedHandle.Remove(id);
+            }
+
             int previousTick;
             if (!LastRecordTick.TryGetValue(id, out previousTick))
             {
@@ -325,6 +343,7 @@ namespace EnRAGECompanionsExtension
                 if (isActive && state.Order == CompanionOrder.Following)
                     LastTravelTick[id] = now;
                 LastPedHealth[id] = ped.Health;
+                LastPedHandle[id] = ped.Handle;
             }
             else
             {
@@ -707,8 +726,19 @@ namespace EnRAGECompanionsExtension
                 return;
 
             bool injured = state.InjurySeverity > 0 && !ped.IsDead && !ped.IsOnMount && !ped.IsInVehicle;
-            if (!injured && !MoveRateApplied.Contains(id))
+            int appliedHandle;
+            bool samePed = MoveRatePedHandles.TryGetValue(id, out appliedHandle) && appliedHandle == ped.Handle;
+            bool wasApplied = MoveRateApplied.Contains(id);
+
+            // Avoid a native call every tick. Reapply only when injury state or the physical ped changes.
+            if (injured && wasApplied && samePed)
                 return;
+            if (!injured && (!wasApplied || !samePed))
+            {
+                MoveRateApplied.Remove(id);
+                MoveRatePedHandles.Remove(id);
+                return;
+            }
 
             ResolveOptionalNatives();
             if (_moveRateNative == null)
@@ -728,8 +758,16 @@ namespace EnRAGECompanionsExtension
                     ped.Handle,
                     injured ? _settings.InjuryMoveRateMultiplier : 1.0f
                 });
-                if (injured) MoveRateApplied.Add(id);
-                else MoveRateApplied.Remove(id);
+                if (injured)
+                {
+                    MoveRateApplied.Add(id);
+                    MoveRatePedHandles[id] = ped.Handle;
+                }
+                else
+                {
+                    MoveRateApplied.Remove(id);
+                    MoveRatePedHandles.Remove(id);
+                }
             }
             catch (Exception ex)
             {
