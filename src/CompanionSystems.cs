@@ -396,7 +396,11 @@ namespace EnRAGECompanionsExtension
                 player != null && player.Exists())
                 UpdateTravelAffinity(id, state, ped, player, now);
             else
+            {
                 LastTravelTick[id] = now;
+                if (player != null && player.Exists())
+                    LastTravelPlayerPosition[id] = player.Position;
+            }
 
             ApplyMoveRate(id, state, ped);
 
