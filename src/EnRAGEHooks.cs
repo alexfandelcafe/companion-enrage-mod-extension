@@ -1175,12 +1175,12 @@ namespace EnRAGECompanionsExtension
 
         private static void PreserveRecruitOutfit(object record, Ped ped)
         {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return;
 
             uint savedHash;
-            if (RecruitedOutfitHashes.TryGetValue(id, out savedHash) && savedHash != 0U)
+            if (_preserveSavedOutfit && TryGetSavedRecruitOutfitHash(record, out savedHash) && savedHash != 0U)
             {
                 ApplySavedRecruitOutfit(record, ped);
                 return;
@@ -1190,11 +1190,11 @@ namespace EnRAGECompanionsExtension
 
         private static void CaptureRecruitOutfitIfMissing(object record, Ped ped)
         {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return;
             uint existing;
-            if (RecruitedOutfitHashes.TryGetValue(id, out existing) && existing != 0U) return;
+            if (TryGetSavedRecruitOutfitHash(record, out existing) && existing != 0U) return;
 
             uint outfitHash;
             if (!TryGetMetaPedOutfitHash(ped, out outfitHash) || outfitHash == 0U)
@@ -1206,17 +1206,42 @@ namespace EnRAGECompanionsExtension
 
             OutfitCaptureFailureLogged.Remove(id);
             RecruitedOutfitHashes[id] = outfitHash;
+            CompanionPersistentState savedState = GetPersistentState(record, true);
+            if (savedState != null)
+            {
+                if (savedState.Appearance == null) savedState.Appearance = new CompanionAppearanceState();
+                savedState.Appearance.HasLegacyOutfitHash = true;
+                savedState.Appearance.LegacyOutfitHash = outfitHash;
+                SavePersistentState(savedState);
+            }
             SavePersistentRecruitOutfits();
             Log("Saved outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
                 (GetMember(record, "Name") as string ?? id) + " (record=" + id + ").");
         }
 
+        private static bool TryGetSavedRecruitOutfitHash(object record, out uint outfitHash)
+        {
+            outfitHash = 0U;
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            if (RecruitedOutfitHashes.TryGetValue(id, out outfitHash) && outfitHash != 0U)
+                return true;
+
+            CompanionPersistentState state = GetPersistentState(record, false);
+            if (state == null || state.Appearance == null || !state.Appearance.HasLegacyOutfitHash ||
+                state.Appearance.LegacyOutfitHash == 0U)
+                return false;
+            outfitHash = state.Appearance.LegacyOutfitHash;
+            RecruitedOutfitHashes[id] = outfitHash;
+            return true;
+        }
+
         private static void ApplySavedRecruitOutfit(object record, Ped ped)
         {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
+            if (!_enableAppearancePersistence || !_preserveSavedOutfit || record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             uint outfitHash;
-            if (string.IsNullOrWhiteSpace(id) || !RecruitedOutfitHashes.TryGetValue(id, out outfitHash) || outfitHash == 0U)
+            if (string.IsNullOrWhiteSpace(id) || !TryGetSavedRecruitOutfitHash(record, out outfitHash) || outfitHash == 0U)
                 return;
 
             try
@@ -2855,6 +2880,28 @@ namespace EnRAGECompanionsExtension
                 Log("WARNING: NemesisSystem.Models.Female(uint) could not be used. Generic recruitment is disabled until the gender helper can be resolved.");
             }
             return false;
+        }
+
+        private static bool IsEligibleReleasedRecruitForRecall(object instance, Ped player, Ped ped)
+        {
+            if (instance == null || player == null || !player.Exists() || ped == null || !ped.Exists() ||
+                ped.IsDead || !ped.IsHuman || ped.Handle == player.Handle || ped.IsHogtied ||
+                ped.IsInVehicle || ped.IsOnMount || ped.Position.DistanceTo(player.Position) > 3.5f ||
+                player.IsInCombat || IsAskBlocked(instance) || CountActiveCompanions(instance) >= _maxCompanions ||
+                AlreadyCompanion(GetField(instance, "_comps") as IList, ped.Handle) ||
+                !IsCachedRecruitedPed(ped.Handle) || IsExtensionCompanionActiveForPed(instance, ped.Handle) ||
+                PED.IS_PED_IN_COMBAT(ped.Handle, 0))
+                return false;
+
+            CachedRosterRecord cached;
+            if (!RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cached) || cached == null || cached.Record == null)
+                return false;
+            string id = GetMember(cached.Record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id) || ExiledRosterIds.Contains(id) || IsExiledRosterRecord(cached.Record))
+                return false;
+            if (GetMember(cached.Record, "IsAlive") is bool alive && !alive)
+                return false;
+            return IsMalePed(ped);
         }
 
         private static bool IsEligibleGenericCandidate(object instance, Ped player, Ped ped, bool directInteractionTarget = false)
