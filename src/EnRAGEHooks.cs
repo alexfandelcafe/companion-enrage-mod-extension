@@ -1510,7 +1510,13 @@ namespace EnRAGECompanionsExtension
                 }
 
                 Ped ped = GetField(companion, "Ped") as Ped;
-                if (ped != null && ped.Exists()) ApplyRecruitedPedIdentity(instance, record, ped);
+                if (ped != null && ped.Exists())
+                {
+                    CompanionSystems.OnCalled(id, ped);
+                    ApplyRecruitedPedIdentity(instance, record, ped);
+                }
+                else
+                    CompanionSystems.OnCalled(id, null);
                 Ped horse = GetField(companion, "Horse") as Ped;
                 if (ped != null && ped.Exists() && horse != null && horse.Exists() && !horse.IsDead && !ped.IsOnMount)
                 {
