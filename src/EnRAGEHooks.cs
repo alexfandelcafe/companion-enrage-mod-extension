@@ -65,6 +65,25 @@ namespace EnRAGECompanionsExtension
         private static string _recruitRosterId = "vdl";
         private static bool _allowFriendlyFire = true;
         private static bool _preventTargeting;
+        private static bool _enableAffinity = true;
+        private static int _affinityTravelIntervalSeconds = 300;
+        private static int _affinityTravelGain = 1;
+        private static int _affinityCombatGain = 2;
+        private static int _affinityTreatmentGain = 3;
+        private static bool _enableAppearancePersistence = true;
+        private static bool _preserveSavedOutfit = true;
+        private static Type _uiDrawType;
+        private static MethodInfo _uiDrawRect;
+        private static MethodInfo _uiDrawText;
+        private sealed class AffinityTravelTracker
+        {
+            internal int StartedAt;
+            internal Vector3 StartPosition;
+        }
+        private static readonly Dictionary<string, AffinityTravelTracker> AffinityTravelTrackers =
+            new Dictionary<string, AffinityTravelTracker>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastAffinityCombatAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastStoryRosterSyncAt = -100000;
         private static int _lastRelationshipMaintenanceAt = -100000;
         private static int _lastRecruitFriendshipMaintenanceAt = -100000;
@@ -196,6 +215,8 @@ namespace EnRAGECompanionsExtension
                     if (detailActions != null) _harmony.Patch(detailActions, postfix: Hook(nameof(DetailActionsPostfix)));
                     if (activateDetail != null) _harmony.Patch(activateDetail, prefix: Hook(nameof(ActivateDetailPrefix)));
                     if (handleDetailKey != null) _harmony.Patch(handleDetailKey, prefix: Hook(nameof(HandleDetailKeyPrefix)));
+                    MethodInfo drawRoster = FindMethod(_rosterMenuType, "Draw", 0);
+                    if (drawRoster != null) _harmony.Patch(drawRoster, postfix: Hook(nameof(RosterMenuDrawPostfix)));
                 }
                 _harmony.Patch(ask, prefix: Hook(nameof(AskPrefix)));
                 // enRAGE's social prompt uses the same context control and target group. When a
@@ -421,7 +442,8 @@ namespace EnRAGECompanionsExtension
             // the original social menu could reappear when those conditions change.
             if (target != null && IsCachedRecruitedPed(target.Handle))
             {
-                _preferredGenericPed = null;
+                // Released recruits remain eligible for a direct "call back" prompt.
+                _preferredGenericPed = IsEligibleReleasedRecruitForRecall(__instance, player, target) ? target : null;
                 InvokeInstance(__instance, "UpdateHatAnim", player);
                 InvokeInstance(__instance, "HideSocialPrompt");
                 return false;
@@ -1698,9 +1720,18 @@ namespace EnRAGECompanionsExtension
                 }
 
                 Ped candidate = null;
-                if (_preferredGenericPed != null && _preferredGenericPed.Exists() &&
-                    IsEligibleGenericCandidate(instance, player, _preferredGenericPed, true))
-                    candidate = _preferredGenericPed;
+                if (_preferredGenericPed != null && _preferredGenericPed.Exists())
+                {
+                    if (IsCachedRecruitedPed(_preferredGenericPed.Handle))
+                    {
+                        if (IsEligibleReleasedRecruitForRecall(instance, player, _preferredGenericPed))
+                            candidate = _preferredGenericPed;
+                    }
+                    else if (IsEligibleGenericCandidate(instance, player, _preferredGenericPed, true))
+                    {
+                        candidate = _preferredGenericPed;
+                    }
+                }
                 _preferredGenericPed = null;
                 if (candidate == null)
                     candidate = FindCandidate(instance, player);
@@ -1744,6 +1775,12 @@ namespace EnRAGECompanionsExtension
 
                 Ped selected = _genericPromptPed;
                 string key = KeyPrefix + candidate.Handle.ToString("X8");
+                CachedRosterRecord recalledRecord;
+                if (RosterRecordsByPedHandle.TryGetValue(candidate.Handle, out recalledRecord) && recalledRecord != null && recalledRecord.Record != null)
+                {
+                    string recalledId = GetMember(recalledRecord.Record, "Id") as string;
+                    if (!string.IsNullOrWhiteSpace(recalledId)) key = KeyPrefix + "roster_" + recalledId;
+                }
                 _genericPromptArmed = false;
                 HideGenericRecruitPrompt();
                 RecruitGeneric(instance, selected, key, player);
