@@ -1191,13 +1191,13 @@ namespace EnRAGECompanionsExtension
             CaptureRecruitOutfitIfMissing(record, ped);
         }
 
-        private static void CaptureRecruitOutfitIfMissing(object record, Ped ped)
+        private static void CaptureRecruitOutfitIfMissing(object record, Ped ped, bool overwriteExisting = false)
         {
             if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return;
             uint existing;
-            if (TryGetSavedRecruitOutfitHash(record, out existing) && existing != 0U) return;
+            if (!overwriteExisting && TryGetSavedRecruitOutfitHash(record, out existing) && existing != 0U) return;
 
             uint outfitHash;
             if (!TryGetMetaPedOutfitHash(ped, out outfitHash) || outfitHash == 0U)
@@ -3595,9 +3595,9 @@ namespace EnRAGECompanionsExtension
             Ped horse = GetField(companion, "Horse") as Ped;
             Ped player = Game.Player.Character;
             try { preserveHorse = ped != null && ped.Exists() && ped.IsOnMount && horse != null && horse.Exists(); } catch { }
-            // Capture while the original ped still has its current world outfit, before RestoreReal
-            // or cleanup has a chance to change its component state.
-            if (ped != null && ped.Exists()) PreserveRecruitOutfit(GetField(companion, "Rec"), ped);
+            // Capture the current outfit before RestoreReal. If the native returns zero, keep any
+            // previously saved non-zero hash rather than replacing it with an invalid value.
+            if (ped != null && ped.Exists()) CaptureRecruitOutfitIfMissing(GetField(companion, "Rec"), ped, true);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
