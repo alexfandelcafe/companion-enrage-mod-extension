@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="System.Runtime.Serialization" />
     <Reference Include="ScriptHookRDRNetAPI">
       <HintPath>$(RDR2GameDir)\ScriptHookRDRNetAPI.dll</HintPath>
       <Private>false</Private>
