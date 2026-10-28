@@ -1935,8 +1935,8 @@ namespace EnRAGECompanionsExtension
                 }
                 try { InvokeInstance(instance, "SaveRoster"); } catch { }
                 InvokeInstance(instance, "ShowSubtitle", existingPed != null
-                    ? name + " ha vuelto; viene hacia ti a caballo."
-                    : name + " viene hacia ti a caballo.");
+                    ? name + " ha vuelto y vuelve a seguirte."
+                    : name + " fue llamado y se acerca para seguirte.");
                 InvokeInstance(menu, "Toggle");
             }
             catch
