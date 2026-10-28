@@ -177,3 +177,11 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 ### Pendiente y verificación
 
 No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. La personalización estándar de componentes, props y arma equipada ya intenta capturarse/restaurarse mediante wrappers nativos reflexivos; faltan inventario completo de armas/munición y datos YMT avanzados. No se ha compilado ni verificado dentro del juego.
+
+
+### Endurecimiento adicional — tratamiento, reincorporación y recuperación del JSON
+
+- El tratamiento pagado ahora comprueba que la salud se haya aplicado realmente al ped vivo. Si no se confirma, intenta devolver el coste usando la firma de incremento de efectivo encontrada en el código decompilado de enRAGE; si la devolución falla, deja un error explícito en el log en lugar de anunciar un tratamiento exitoso.
+- La asistencia a un compañero incapacitado no borra el estado persistente de incapacitación ni lo marca como recuperado hasta verificar que el ped existe, ya no figura como muerto y tiene salud positiva. Si esa comprobación falla, conserva el estado para permitir otro intento.
+- La carga del estado persistente intenta recuperar `EnRAGECompanionsExtension.companions.json.bak` cuando falta el archivo principal o no puede deserializarse. La copia primaria ilegible se conserva como archivo de cuarentena antes de restaurar el backup, cuando el sistema de archivos lo permite.
+- Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo, el levantamiento y la recuperación tras un JSON corrupto.
