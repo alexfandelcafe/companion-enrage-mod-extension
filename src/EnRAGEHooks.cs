@@ -595,6 +595,8 @@ namespace EnRAGECompanionsExtension
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
                 if (recruitedRecord)
                 {
+                    __result.RemoveAll(x => x != null && x.StartsWith("Confianza: ", StringComparison.Ordinal));
+                    InsertBeforeBack(__result, "Confianza: " + CompanionSystems.GetAffinity(id).ToString(CultureInfo.InvariantCulture) + "/100");
                     __result.Remove("Llamarlo");
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
                         InsertBeforeBack(__result, "Llamarlo");
@@ -670,6 +672,16 @@ namespace EnRAGECompanionsExtension
                 if (actions == null || selected < 0 || selected >= actions.Count) return true;
                 string action = actions[selected];
                 string recordIdForConfirmation = GetMember(record, "Id") as string;
+                if (action != null && action.StartsWith("Confianza: ", StringComparison.Ordinal) &&
+                    IsRecruitedRosterRecord(record))
+                {
+                    string affinityName = (GetMember(record, "FullName") as string) ??
+                        (GetMember(record, "Name") as string) ?? "Compañero";
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle",
+                        affinityName + " — confianza: " +
+                        CompanionSystems.GetAffinity(recordIdForConfirmation).ToString(CultureInfo.InvariantCulture) + "/100.");
+                    return false;
+                }
                 if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
                     string.Equals(_pendingKickRosterRecordId, recordIdForConfirmation, StringComparison.OrdinalIgnoreCase) &&
                     action != "Confirmar expulsión" && action != "Cancelar expulsión" && action != "Echar de la banda")
@@ -2298,7 +2310,9 @@ namespace EnRAGECompanionsExtension
             if (companionPed == null || !companionPed.Exists() || companionPed.IsDead || player == null || !player.Exists())
                 return;
 
-            Ped threat = FindAttackerTarget(instance, companionPed, player);
+            object trackedRecord = GetField(companion, "Rec");
+            string trackedRecordId = GetMember(trackedRecord, "Id") as string;
+            Ped threat = FindAttackerTarget(instance, companionPed, player, trackedRecordId);
             int companionHandle = companionPed.Handle;
             int previousTarget;
             bool hadPreviousTarget = CustomCompanionCombatTargets.TryGetValue(companionHandle, out previousTarget);
@@ -2337,10 +2351,11 @@ namespace EnRAGECompanionsExtension
                     try { TASK.CLEAR_PED_TASKS(companionHandle, true, false); } catch { }
                 TASK.TASK_COMBAT_PED(companionHandle, targetHandle, 0, 16);
                 CustomCompanionCombatTargets[companionHandle] = targetHandle;
+                CompanionSystems.NotifyCombat(trackedRecordId, targetHandle);
             }
         }
 
-        private static Ped FindAttackerTarget(object instance, Ped companion, Ped player)
+        private static Ped FindAttackerTarget(object instance, Ped companion, Ped player, string recordId)
         {
             MethodInfo around = FindMethod(_mainType, "PedsAround", 1, p => IsPedType(p[0].ParameterType));
             if (around == null || !around.IsStatic) return null;
@@ -2367,6 +2382,7 @@ namespace EnRAGECompanionsExtension
                 // This intentionally excludes merely hostile / passing peds. A recruit responds
                 // only after the candidate is actually in combat with the player, not merely hated.
                 if (!attackingPlayer) continue;
+                if (!CompanionSystems.IsTargetAllowed(recordId, companion, player, candidate, Game.GameTime)) continue;
 
                 if (IsCachedRecruitedPed(candidate.Handle)) continue;
                 best = candidate;
