@@ -59,11 +59,11 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
-        // Keep distinct physical actions for orders: INPUT_ENTER maps to E, while the second
-        // control is a different action/key (R on the default layout). Do not register two E actions
-        // into the same entity prompt group: RDR2 can swallow or replace other prompts in that group.
-        private const int IndividualOrderPromptControl = unchecked((int)0xCEFD9220); // E
-        private const int IndividualRestPromptControl = unchecked((int)0x6D1319BE); // R
+        // Use three separate actions for the custom prompts: context-no (F on the default layout),
+        // reload (R), and context-yes (E). Do not reuse E for normal orders: this was competing with
+        // the game's native interaction prompt on some target groups and made the G action disappear.
+        private const int IndividualOrderPromptControl = unchecked((int)0xDFF812F9); // F / context-no
+        private const int IndividualRestPromptControl = unchecked((int)0x6D1319BE); // R / reload
         private const int IncapacitatedPromptControl = unchecked((int)0xCEFD9220); // E while orders are hidden
         private const int CombatStancePromptControl = -2074855166; // H; medicine prompt is hidden during combat
         private static int _incapacitatedPrompt;
