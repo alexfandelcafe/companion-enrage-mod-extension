@@ -22,6 +22,7 @@ namespace EnRAGECompanionsExtension
         [DataMember(Order = 9)] public long LastUpdatedUtcTicks { get; set; }
         // Kept separately from FollowState so a resting companion can resume/expire the rest timer.
         [DataMember(Order = 10)] public long RestStartedUtcTicks { get; set; }
+        [DataMember(Order = 11)] public int RosterOrder { get; set; }
 
         public CompanionPersistentState()
         {
@@ -35,6 +36,7 @@ namespace EnRAGECompanionsExtension
             Appearance = new CompanionAppearanceState();
             LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
             RestStartedUtcTicks = 0;
+            RosterOrder = -1;
         }
 
         public void Normalize(string recordId)
@@ -58,6 +60,8 @@ namespace EnRAGECompanionsExtension
                 LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
             if (RestStartedUtcTicks < 0 || RestStartedUtcTicks > DateTime.MaxValue.Ticks)
                 RestStartedUtcTicks = 0;
+            if (RosterOrder < -1) RosterOrder = -1;
+            if (RosterOrder > 10000) RosterOrder = 10000;
         }
 
         private static int Clamp(int value, int min, int max)
