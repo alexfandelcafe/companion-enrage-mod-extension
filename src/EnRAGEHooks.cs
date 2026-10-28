@@ -591,10 +591,10 @@ namespace EnRAGECompanionsExtension
                 int affinity = Math.Max(0, Math.Min(100, state.Affinity));
                 float x = 0.665f;
                 float width = 0.235f;
-                _uiDrawRect.Invoke(null, new object[] { x, 0.149f, width, 0.012f, 26, 24, 20, 220 });
+                _uiDrawRect.Invoke(null, new object[] { x, 0.170f, width, 0.012f, 26, 24, 20, 220 });
                 if (affinity > 0)
-                    _uiDrawRect.Invoke(null, new object[] { x, 0.149f, width * affinity / 100f, 0.012f, 189, 153, 83, 245 });
-                _uiDrawText.Invoke(null, new object[] { "AFINIDAD  " + affinity + "/100", x, 0.129f, 0.20f, 235, 230, 220, 255 });
+                    _uiDrawRect.Invoke(null, new object[] { x, 0.170f, width * affinity / 100f, 0.012f, 189, 153, 83, 245 });
+                _uiDrawText.Invoke(null, new object[] { "AFINIDAD  " + affinity + "/100", x, 0.148f, 0.20f, 235, 230, 220, 255 });
             }
             catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
         }
@@ -1066,6 +1066,7 @@ namespace EnRAGECompanionsExtension
             }
 
             HealPedToMaximum(ped);
+            AwardAffinity(record, _affinityTreatmentGain, "treatment");
             PendingFullHealthIds.Remove(id);
             SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
             InvokeInstance(instance, "ShowSubtitle", name + " recuperó toda su salud. Coste: 1 dólar.");
@@ -2511,6 +2512,15 @@ namespace EnRAGECompanionsExtension
             }
 
             int targetHandle = threat.Handle;
+            object affinityRecord = GetField(companion, "Rec");
+            string affinityId = GetMember(affinityRecord, "Id") as string;
+            int lastCombatAt;
+            if (!string.IsNullOrWhiteSpace(affinityId) &&
+                (!LastAffinityCombatAt.TryGetValue(affinityId, out lastCombatAt) || now < lastCombatAt || now - lastCombatAt >= 30000))
+            {
+                LastAffinityCombatAt[affinityId] = now;
+                AwardAffinity(affinityRecord, _affinityCombatGain, "combat");
+            }
             CustomCombatSuppressedAt.Remove(companionHandle);
             bool sameTarget = hadPreviousTarget && previousTarget == targetHandle;
             bool currentlyFightingTarget = false;
@@ -3919,9 +3929,16 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("RecruitRosterId")) missingSettings.Add("RecruitRosterId=vdl");
                     if (!existingKeys.Contains("AllowFriendlyFire")) missingSettings.Add("AllowFriendlyFire=true");
                     if (!existingKeys.Contains("PreventTargeting")) missingSettings.Add("PreventTargeting=false");
+                    if (!existingKeys.Contains("EnableAffinity")) missingSettings.Add("EnableAffinity=true");
+                    if (!existingKeys.Contains("AffinityTravelIntervalSeconds")) missingSettings.Add("AffinityTravelIntervalSeconds=300");
+                    if (!existingKeys.Contains("AffinityTravelGain")) missingSettings.Add("AffinityTravelGain=1");
+                    if (!existingKeys.Contains("AffinityCombatGain")) missingSettings.Add("AffinityCombatGain=2");
+                    if (!existingKeys.Contains("AffinityTreatmentGain")) missingSettings.Add("AffinityTreatmentGain=3");
+                    if (!existingKeys.Contains("EnableAppearancePersistence")) missingSettings.Add("EnableAppearancePersistence=true");
+                    if (!existingKeys.Contains("PreserveSavedOutfit")) missingSettings.Add("PreserveSavedOutfit=true");
                     if (missingSettings.Count > 0)
                     {
-                        File.AppendAllText(path, Environment.NewLine + "; Added settings for recruitment and targeting" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
+                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity and appearance persistence" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
                     }
                     foreach (string raw in existingLines)
                     {
@@ -3945,6 +3962,20 @@ namespace EnRAGECompanionsExtension
                             _allowFriendlyFire = friendlyFire;
                         else if (key.Equals("PreventTargeting", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool preventTargeting))
                             _preventTargeting = preventTargeting;
+                        else if (key.Equals("EnableAffinity", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableAffinity))
+                            _enableAffinity = enableAffinity;
+                        else if (key.Equals("AffinityTravelIntervalSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int travelInterval))
+                            _affinityTravelIntervalSeconds = Math.Max(30, Math.Min(7200, travelInterval));
+                        else if (key.Equals("AffinityTravelGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int travelGain))
+                            _affinityTravelGain = Math.Max(0, Math.Min(100, travelGain));
+                        else if (key.Equals("AffinityCombatGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int combatGain))
+                            _affinityCombatGain = Math.Max(0, Math.Min(100, combatGain));
+                        else if (key.Equals("AffinityTreatmentGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int treatmentGain))
+                            _affinityTreatmentGain = Math.Max(0, Math.Min(100, treatmentGain));
+                        else if (key.Equals("EnableAppearancePersistence", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool appearancePersistence))
+                            _enableAppearancePersistence = appearancePersistence;
+                        else if (key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool preserveOutfit))
+                            _preserveSavedOutfit = preserveOutfit;
                     }
                 }
                 else
@@ -3961,7 +3992,14 @@ namespace EnRAGECompanionsExtension
                         "; True allows player damage/friendly fire; false blocks player targeting.\r\n" +
                         "AllowFriendlyFire=true\r\n" +
                         "; Force the grey/disabled target dot even if friendly fire is enabled.\r\n" +
-                        "PreventTargeting=false\r\n");
+                        "PreventTargeting=false\r\n" +
+                        "EnableAffinity=true\r\n" +
+                        "AffinityTravelIntervalSeconds=300\r\n" +
+                        "AffinityTravelGain=1\r\n" +
+                        "AffinityCombatGain=2\r\n" +
+                        "AffinityTreatmentGain=3\r\n" +
+                        "EnableAppearancePersistence=true\r\n" +
+                        "PreserveSavedOutfit=true\r\n");
                 }
             }
             catch (Exception ex)
