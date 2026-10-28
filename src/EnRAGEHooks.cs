@@ -589,12 +589,14 @@ namespace EnRAGECompanionsExtension
                 if (_uiDrawRect == null || _uiDrawText == null) return;
 
                 int affinity = Math.Max(0, Math.Min(100, state.Affinity));
-                float x = 0.665f;
-                float width = 0.235f;
-                _uiDrawRect.Invoke(null, new object[] { x, 0.170f, width, 0.012f, 26, 24, 20, 220 });
+                // The bottom row of the detail sheet has spare space to the right of the injected
+                // actions; anchor the meter there instead of covering enRAGE's profile columns.
+                float x = 0.74f;
+                float width = 0.15f;
+                _uiDrawRect.Invoke(null, new object[] { x, 0.839f, width, 0.010f, 26, 24, 20, 220 });
                 if (affinity > 0)
-                    _uiDrawRect.Invoke(null, new object[] { x, 0.170f, width * affinity / 100f, 0.012f, 189, 153, 83, 245 });
-                _uiDrawText.Invoke(null, new object[] { "AFINIDAD  " + affinity + "/100", x, 0.148f, 0.20f, 235, 230, 220, 255 });
+                    _uiDrawRect.Invoke(null, new object[] { x, 0.839f, width * affinity / 100f, 0.010f, 189, 153, 83, 245 });
+                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.815f, 0.18f, 235, 230, 220, 255 });
             }
             catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
         }
@@ -735,8 +737,8 @@ namespace EnRAGECompanionsExtension
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
                 if (recruitedRecord)
                 {
-                    __result.Remove("Afinidad");
-                    __result.Remove("Ver afinidad");
+                    __result.RemoveAll(action => action != null &&
+                        action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0);
                     if (_enableAffinity)
                     {
                         InsertBeforeBack(__result, "Mejorar afinidad (+10)");
