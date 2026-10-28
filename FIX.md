@@ -149,6 +149,15 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 - La carga tolera registros inválidos y archivos ausentes. Un JSON ilegible o con versión no admitida se conserva renombrándolo como archivo de cuarentena antes de continuar con un almacén vacío y la importación legacy.
 - El almacén se inicializa desde `EntryPoint`; el guardado de migración se realiza solo si hay cambios.
 
+### Fase 3 — órdenes individuales y descanso
+
+- La ficha individual muestra `Quédate aquí` y `Descansar` cuando el compañero está activo, o `Sígueme` cuando está esperando/descansando.
+- `Quédate aquí` guarda coordenadas por ID estable de roster y evita que el ciclo normal `WaitToJoin/Ride` sobrescriba la tarea de espera. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
+- `Descansar` mantiene el anclaje durante `RestDurationSeconds`, luego elimina el estado de lesión persistente, restaura la salud actual y vuelve a `Following`. Tanto el temporizador como el estado se almacenan en el JSON.
+- `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
+- Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
+- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode`, `WaitRadius` y `RestDurationSeconds` al INI autogenerado y al ejemplo. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
+
 ### Pendiente y verificación
 
-Esta fase no conecta aún los estados nuevos a las tareas de IA ni a los prompts. Tampoco implementa natives de ropa, sombreros o armas. La compilación y las pruebas dentro del juego siguen pendientes porque requieren .NET Framework/MSBuild y el `ScriptHookRDRNetAPI.dll` de la instalación objetivo.
+No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. La persistencia de componentes individuales de ropa, sombrero y armas tampoco está implementada; esa limitación es independiente de la Fase 3.
