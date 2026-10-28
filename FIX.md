@@ -185,3 +185,6 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 - La asistencia a un compañero incapacitado no borra el estado persistente de incapacitación ni lo marca como recuperado hasta verificar que el ped existe, ya no figura como muerto y tiene salud positiva. Si esa comprobación falla, conserva el estado para permitir otro intento.
 - La carga del estado persistente intenta recuperar `EnRAGECompanionsExtension.companions.json.bak` cuando falta el archivo principal o no puede deserializarse. La copia primaria ilegible se conserva como archivo de cuarentena antes de restaurar el backup, cuando el sistema de archivos lo permite.
 - Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo, el levantamiento y la recuperación tras un JSON corrupto.
+
+
+- **Limitación pendiente de detección de daño:** el controlador de lesiones actual compara la salud entre muestras y aplica un umbral. No clasifica de forma exhaustiva el origen de cada impacto (jugador, NPC hostil, caída o entorno), ni prueba que varios descensos cercanos siempre correspondan a impactos distintos. Ese criterio de aceptación sigue parcialmente pendiente hasta verificar una API fiable de atribución del daño en la versión objetivo.
