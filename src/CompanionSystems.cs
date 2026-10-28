@@ -634,8 +634,10 @@ namespace EnRAGECompanionsExtension
             if (elapsed < 0 || elapsed > 10000)
                 elapsed = 0;
 
+            bool eligible = Distance(ped.Position, player.Position) <= 25.0f &&
+                !ped.IsDead && !ped.IsInCombat;
             RDR2.Math.Vector3 previousPosition;
-            if (LastTravelPlayerPosition.TryGetValue(id, out previousPosition))
+            if (LastTravelPlayerPosition.TryGetValue(id, out previousPosition) && eligible)
             {
                 float moved = Distance(previousPosition, player.Position);
                 // Discard teleports/streaming jumps instead of rewarding them as travel.
@@ -648,8 +650,6 @@ namespace EnRAGECompanionsExtension
             }
             LastTravelPlayerPosition[id] = player.Position;
 
-            bool eligible = Distance(ped.Position, player.Position) <= 25.0f &&
-                !ped.IsDead && !ped.IsInCombat;
             if (!eligible)
                 return;
 
