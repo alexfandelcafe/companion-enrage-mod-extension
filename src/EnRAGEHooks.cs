@@ -4250,7 +4250,7 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("RestDurationSeconds")) missingSettings.Add("RestDurationSeconds=60");
                     if (missingSettings.Count > 0)
                     {
-                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity and appearance persistence" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
+                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity, appearance, and individual companion orders" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
                     }
                     foreach (string raw in existingLines)
                     {
