@@ -20,3 +20,8 @@ AffinityTreatmentGain=3
 ; Capture and reapply the current RDR2 meta-ped outfit hash when available.
 EnableAppearancePersistence=true
 PreserveSavedOutfit=true
+; Individual companion orders and wait/rest behavior.
+EnableIndividualOrders=true
+EnableWaitMode=true
+WaitRadius=8.0
+RestDurationSeconds=60
