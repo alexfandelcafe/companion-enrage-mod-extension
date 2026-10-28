@@ -2520,6 +2520,12 @@ namespace EnRAGECompanionsExtension
                 }
 
                 CompanionPersistentState state = GetPersistentState(cached.Record, true);
+                if (IsPedIncapacitatedRecruit(target) ||
+                    (state != null && state.Injury != null && state.Injury.IsIncapacitated))
+                {
+                    HideIndividualOrderPrompts();
+                    return;
+                }
                 CompanionFollowState current = state == null ? CompanionFollowState.Following : state.FollowState;
                 CompanionFollowState primaryOrder = current == CompanionFollowState.Following
                     ? CompanionFollowState.Waiting : CompanionFollowState.Following;
@@ -2903,7 +2909,14 @@ namespace EnRAGECompanionsExtension
                 CachedRosterRecord cached;
                 if (!RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
                     cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
-                    IsExiledRosterRecord(cached.Record))
+                    IsExiledRosterRecord(cached.Record) || IsPedIncapacitatedRecruit(target))
+                {
+                    HideRecruitMedicinePrompt();
+                    return;
+                }
+
+                // During a real encounter H is reserved for the contextual combat-stance prompt.
+                if (FindAttackerTarget(instance, target, player) != null)
                 {
                     HideRecruitMedicinePrompt();
                     return;
@@ -2915,7 +2928,9 @@ namespace EnRAGECompanionsExtension
                 {
                     HideRecruitMedicinePrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, RecruitMedicinePromptControl);
-                    object result = _makePrompt.Invoke(null, new object[] { control, "Dar remedio ($1)", true, group });
+                    string promptLabel = "Dar remedio ($" +
+                        (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) + ")";
+                    object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
                     _medicinePrompt = Convert.ToInt32(result);
                     _medicinePromptFor = target.Handle;
                     _medicinePromptGroup = group;
@@ -4144,6 +4159,13 @@ namespace EnRAGECompanionsExtension
                 AmbientReleasedRecruitPeds.Remove(handle);
                 AmbientReleasedWanderAt.Remove(handle);
                 ApplyPendingFullHealthIfNeeded(record, ped);
+                if (ped != null && ped.Exists() && !string.IsNullOrWhiteSpace(id))
+                {
+                    if (!LastObservedHealthById.ContainsKey(id))
+                        LastObservedHealthById[id] = ped.Health;
+                    if (!LastHealthSampleAtById.ContainsKey(id))
+                        LastHealthSampleAtById[id] = Game.GameTime;
+                }
             }
         }
 
@@ -4155,18 +4177,43 @@ namespace EnRAGECompanionsExtension
                 CachedRosterRecord cached = pair.Value;
                 if (cached == null || cached.Record == null || cached.Ped == null)
                     continue;
-                if (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive)
-                    continue;
                 try
                 {
-                    if (!cached.Ped.Exists() || !cached.Ped.IsDead)
+                    Ped ped = cached.Ped;
+                    if (!ped.Exists()) continue;
+                    string id = GetMember(cached.Record, "Id") as string;
+                    if (!ped.IsDead && !ped.IsIncapacitated) continue;
+
+                    int health = 0;
+                    try { health = ped.Health; } catch { }
+                    int previousHealth;
+                    if (!string.IsNullOrWhiteSpace(id) &&
+                        LastObservedHealthById.TryGetValue(id, out previousHealth) && health < previousHealth)
+                        LastDamageAtById[id] = Game.GameTime;
+
+                    // In RDR2 a ped can report IsDead while still in the incapacitated state.
+                    // Try the recovery path before mutating the roster's IsAlive flag.
+                    if (IsLikelyIncapacitated(cached.Record, ped, id))
+                    {
+                        SetMember(cached.Record, "IsAlive", true);
+                        SetMember(cached.Record, "PresumedDead", false);
+                        TryEnterIncapacitated(instance, cached.Record, ped);
+                        continue;
+                    }
+
+                    if (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive)
                         continue;
                     SetMember(cached.Record, "IsAlive", false);
                     SetMember(cached.Record, "PresumedDead", false);
                     AppliedPromptNames.Remove(pair.Key);
                     CustomCompanionCombatTargets.Remove(pair.Key);
                     CustomCombatSuppressedAt.Remove(pair.Key);
-                    string zone = InvokeInstance(instance, "GetZoneName", cached.Ped.Position) as string;
+                    if (!string.IsNullOrWhiteSpace(id))
+                    {
+                        RestScenarioStartedIds.Remove(id);
+                        LastObservedHealthById.Remove(id);
+                    }
+                    string zone = InvokeInstance(instance, "GetZoneName", ped.Position) as string;
                     if (!string.IsNullOrWhiteSpace(zone))
                         SetMember(cached.Record, "LastDefeatLocation", zone);
                     Log("Marked recruited faction member dead: " +
@@ -4794,6 +4841,12 @@ namespace EnRAGECompanionsExtension
                     ped = GetField(companion, "Real") as Ped;
                 if (ped == null || !ped.Exists() || !ped.IsDead)
                     return;
+                string recordId = GetMember(record, "Id") as string;
+                if (IsLikelyIncapacitated(record, ped, recordId))
+                {
+                    TryEnterIncapacitated(instance, record, ped);
+                    return;
+                }
 
                 SetMember(record, "IsAlive", false);
                 SetMember(record, "PresumedDead", false);
