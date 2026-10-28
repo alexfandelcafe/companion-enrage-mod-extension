@@ -138,6 +138,7 @@ namespace EnRAGECompanionsExtension
         private static Type _uiDrawType;
         private static MethodInfo _uiDrawRect;
         private static MethodInfo _uiDrawText;
+        private static object _activeAffinityDetailRecord;
         private sealed class AffinityTravelTracker
         {
             internal int StartedAt;
@@ -278,7 +279,15 @@ namespace EnRAGECompanionsExtension
                     if (activateDetail != null) _harmony.Patch(activateDetail, prefix: Hook(nameof(ActivateDetailPrefix)));
                     if (handleDetailKey != null) _harmony.Patch(handleDetailKey, prefix: Hook(nameof(HandleDetailKeyPrefix)));
                     MethodInfo drawRoster = FindMethod(_rosterMenuType, "Draw", 0);
-                    if (drawRoster != null) _harmony.Patch(drawRoster, postfix: Hook(nameof(RosterMenuDrawPostfix)));
+                    if (drawRoster != null)
+                        _harmony.Patch(drawRoster, prefix: Hook(nameof(RosterMenuDrawPrefix)), postfix: Hook(nameof(RosterMenuDrawPostfix)));
+                    Type uiDraw = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "UiDraw");
+                    MethodInfo affinityText = FindMethod(uiDraw, "Text", 8, p =>
+                        p[0].ParameterType == typeof(string) && p[1].ParameterType == typeof(float) &&
+                        p[2].ParameterType == typeof(float) && p[3].ParameterType == typeof(float) &&
+                        p.Skip(4).All(x => x.ParameterType == typeof(int)));
+                    if (affinityText != null)
+                        _harmony.Patch(affinityText, postfix: Hook(nameof(AffinityTextPostfix)));
                 }
                 _harmony.Patch(ask, prefix: Hook(nameof(AskPrefix)));
                 // enRAGE's social prompt uses the same context control and target group. When a
@@ -717,12 +726,35 @@ namespace EnRAGECompanionsExtension
             return string.Equals(id, "vdl", StringComparison.OrdinalIgnoreCase) ? "Van der Linde" : id;
         }
 
-        private static void RosterMenuDrawPostfix(object __instance)
+        private static void RosterMenuDrawPrefix(object __instance)
         {
             try
             {
-                if (!_enableAffinity || __instance == null) return;
                 object record = GetField(__instance, "_detail");
+                _activeAffinityDetailRecord = _enableAffinity && IsRecruitedRosterRecord(record) ? record : null;
+            }
+            catch
+            {
+                _activeAffinityDetailRecord = null;
+            }
+        }
+
+        private static void RosterMenuDrawPostfix(object __instance)
+        {
+            // UiDraw.Text's postfix injects the meter next to the actual SENTIMIENTOS header,
+            // whose y coordinate changes with each recruit's profile. Clear the context after Draw.
+            _activeAffinityDetailRecord = null;
+        }
+
+        private static void AffinityTextPostfix(object[] __args)
+        {
+            try
+            {
+                if (!_enableAffinity || __args == null || __args.Length < 8 ||
+                    !string.Equals(__args[0] as string, "SENTIMIENTOS", StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                object record = _activeAffinityDetailRecord;
                 if (record == null || !IsRecruitedRosterRecord(record)) return;
                 CompanionPersistentState state = GetPersistentState(record, true);
                 if (state == null) return;
@@ -730,7 +762,6 @@ namespace EnRAGECompanionsExtension
                 if (_uiDrawType == null && _mainType != null)
                     _uiDrawType = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "UiDraw");
                 if (_uiDrawType == null) return;
-
                 if (_uiDrawRect == null)
                     _uiDrawRect = FindMethod(_uiDrawType, "Rect", 8, p =>
                         p[0].ParameterType == typeof(float) && p[1].ParameterType == typeof(float) &&
@@ -744,15 +775,16 @@ namespace EnRAGECompanionsExtension
                 if (_uiDrawRect == null || _uiDrawText == null) return;
 
                 int affinity = Math.Max(0, Math.Min(100, state.Affinity));
-                // The left content column spans x=.09 to x=.49; keep the meter aligned with
-                // SENTIMIENTOS instead of the far-right edge where long rows/tiles read as HISTORIAL.
-                // Keep the bar compact and left-aligned to avoid drifting over the second column.
-                float x = 0.095f;
-                float width = 0.29f;
-                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.318f, 0.30f, 235, 230, 220, 255 });
-                _uiDrawRect.Invoke(null, new object[] { x, 0.339f, width, 0.0055f, 26, 24, 20, 220 });
+                float headerX = Convert.ToSingle(__args[1], CultureInfo.InvariantCulture);
+                float headerY = Convert.ToSingle(__args[2], CultureInfo.InvariantCulture);
+                // Keep the label and meter on the same header row as SENTIMIENTOS, using the
+                // actual draw coordinates rather than fixed screen coordinates that can overlap history.
+                float x = headerX + 0.155f;
+                float width = 0.225f;
+                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, headerY, width, 235, 230, 220, 255 });
+                _uiDrawRect.Invoke(null, new object[] { x, headerY + 0.021f, width, 0.0045f, 26, 24, 20, 220 });
                 if (affinity > 0)
-                    _uiDrawRect.Invoke(null, new object[] { x, 0.339f, width * affinity / 100f, 0.0055f, 189, 153, 83, 245 });
+                    _uiDrawRect.Invoke(null, new object[] { x, headerY + 0.021f, width * affinity / 100f, 0.0045f, 189, 153, 83, 245 });
             }
             catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
         }
