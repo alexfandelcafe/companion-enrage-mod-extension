@@ -112,6 +112,7 @@ namespace EnRAGECompanionsExtension
         private static int _incapacitatedHealthPercent = 35;
         private static int _medicineHealingPercent = 100;
         private static int _medicineRecoveryReductionSeconds = 60;
+        private static bool _restHealsInjuries = true;
         private static int _recruitMedicineCostCents = 100;
         private static readonly Dictionary<string, int> LastIndividualOrderTaskAt =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -128,6 +129,8 @@ namespace EnRAGECompanionsExtension
         private static readonly HashSet<string> RestScenarioStartedIds =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastPlayerFireAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastResurrectionAttemptAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static Type _uiDrawType;
         private static MethodInfo _uiDrawRect;
@@ -898,7 +901,7 @@ namespace EnRAGECompanionsExtension
                     state.FollowState = CompanionFollowState.Following;
                     state.RestStartedUtcTicks = 0;
                     if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
-                    if (state.Injury != null)
+                    if (_restHealsInjuries && state.Injury != null)
                     {
                         state.Injury.IsInjured = false;
                         state.Injury.Severity = 0;
@@ -906,7 +909,8 @@ namespace EnRAGECompanionsExtension
                         state.Injury.FirstInjuredUtcTicks = 0;
                     }
                     SavePersistentState(state);
-                    HealPedToMaximum(ped);
+                    if (_restHealsInjuries) HealPedToMaximum(ped);
+                    RestScenarioStartedIds.Remove(id);
                     LastIndividualOrderTaskAt.Remove(id);
                     SetField(companion, "State", 0);
                     SetField(companion, "AskedAt", Game.GameTime);
@@ -1489,25 +1493,53 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(instance, "ShowSubtitle", "No se pudo comprobar el dinero disponible.");
                 return;
             }
-            if (cash < RecruitMedicineCostCents)
+            if (cash < _recruitMedicineCostCents)
             {
-                InvokeInstance(instance, "ShowSubtitle", "Necesitas 1 dólar para comprar el remedio.");
+                InvokeInstance(instance, "ShowSubtitle", "Necesitas " +
+                    (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) +
+                    " dólares para comprar el remedio.");
                 return;
             }
 
-            try { MONEY._MONEY_DECREMENT_CASH_BALANCE(RecruitMedicineCostCents); }
+            int now = Game.GameTime;
+            int lastTransaction;
+            if (LastMedicineTransactionAt.TryGetValue(id, out lastTransaction) &&
+                now >= lastTransaction && now - lastTransaction < 2000)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "El remedio ya se está procesando; no se cobró otra vez.");
+                return;
+            }
+            // Claim this record before debiting cash. If a duplicate prompt fires while the native
+            // call completes, it cannot charge twice during the same transaction window.
+            LastMedicineTransactionAt[id] = now;
+            try { if (_recruitMedicineCostCents > 0) MONEY._MONEY_DECREMENT_CASH_BALANCE(_recruitMedicineCostCents); }
             catch (Exception ex)
             {
                 Log("Medicine payment failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo cobrar el remedio; no se aplicó la curación.");
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo confirmar el cobro; espera un momento antes de volver a intentarlo.");
                 return;
             }
 
-            HealPedToMaximum(ped);
+            ApplyConfiguredMedicineHealing(ped);
+            CompanionPersistentState injuryState = GetPersistentState(record, true);
+            if (injuryState != null && injuryState.Injury != null && injuryState.Injury.IsInjured)
+            {
+                injuryState.Injury.RecoverySecondsRemaining = Math.Max(0,
+                    injuryState.Injury.RecoverySecondsRemaining - _medicineRecoveryReductionSeconds);
+                if (injuryState.Injury.RecoverySecondsRemaining <= 0 && !injuryState.Injury.IsIncapacitated)
+                {
+                    injuryState.Injury.IsInjured = false;
+                    injuryState.Injury.Severity = 0;
+                    injuryState.Injury.FirstInjuredUtcTicks = 0;
+                }
+                SavePersistentState(injuryState);
+            }
             AwardAffinity(record, _affinityTreatmentGain, "treatment");
             PendingFullHealthIds.Remove(id);
             SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-            InvokeInstance(instance, "ShowSubtitle", name + " recuperó toda su salud. Coste: 1 dólar.");
+            InvokeInstance(instance, "ShowSubtitle", name + " recibió el remedio. Curación: " +
+                _medicineHealingPercent + "%. Coste: " +
+                (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) + " dólares.");
             Log("Applied contextual medicine to " + name + " (record=" + id + ").");
         }
 
@@ -1545,9 +1577,17 @@ namespace EnRAGECompanionsExtension
             return null;
         }
 
-        private static void HealPedToMaximum(Ped ped)
+        private static void ApplyConfiguredMedicineHealing(Ped ped)
         {
             if (ped == null || !ped.Exists() || ped.IsDead) return;
+            int maxHealth = Math.Max(1, ped.MaxHealth);
+            int amount = Math.Max(1, (int)Math.Ceiling(maxHealth * _medicineHealingPercent / 100.0));
+            ped.Health = Math.Min(maxHealth, Math.Max(1, ped.Health) + amount);
+        }
+
+        private static void HealPedToMaximum(Ped ped)
+        {
+            if (ped == null || !ped.Exists() || (ped.IsDead && !ped.IsIncapacitated)) return;
             int maxHealth = ped.MaxHealth;
             if (maxHealth > 0) ped.Health = maxHealth;
         }
@@ -5028,6 +5068,14 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("EnableWaitMode")) missingSettings.Add("EnableWaitMode=true");
                     if (!existingKeys.Contains("WaitRadius")) missingSettings.Add("WaitRadius=8.0");
                     if (!existingKeys.Contains("RestDurationSeconds")) missingSettings.Add("RestDurationSeconds=60");
+                    if (!existingKeys.Contains("EnableInjurySystem")) missingSettings.Add("EnableInjurySystem=true");
+                    if (!existingKeys.Contains("InjuryDamageThresholdPercent")) missingSettings.Add("InjuryDamageThresholdPercent=10");
+                    if (!existingKeys.Contains("InjuryRecoverySeconds")) missingSettings.Add("InjuryRecoverySeconds=180");
+                    if (!existingKeys.Contains("IncapacitatedHealthPercent")) missingSettings.Add("IncapacitatedHealthPercent=35");
+                    if (!existingKeys.Contains("MedicineHealingPercent")) missingSettings.Add("MedicineHealingPercent=100");
+                    if (!existingKeys.Contains("MedicineRecoveryReductionSeconds")) missingSettings.Add("MedicineRecoveryReductionSeconds=60");
+                    if (!existingKeys.Contains("RecruitMedicineCostCents")) missingSettings.Add("RecruitMedicineCostCents=100");
+                    if (!existingKeys.Contains("RestHealsInjuries")) missingSettings.Add("RestHealsInjuries=true");
                     if (missingSettings.Count > 0)
                     {
                         File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity, appearance, and individual companion orders" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
@@ -5077,6 +5125,22 @@ namespace EnRAGECompanionsExtension
                             _waitRadius = Math.Max(1.0f, Math.Min(50.0f, waitRadius));
                         else if (key.Equals("RestDurationSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int restDuration))
                             _restDurationSeconds = Math.Max(10, Math.Min(3600, restDuration));
+                        else if (key.Equals("EnableInjurySystem", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableInjurySystem))
+                            _enableInjurySystem = enableInjurySystem;
+                        else if (key.Equals("InjuryDamageThresholdPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryThreshold))
+                            _injuryDamageThresholdPercent = Math.Max(1, Math.Min(50, injuryThreshold));
+                        else if (key.Equals("InjuryRecoverySeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryRecovery))
+                            _injuryRecoverySeconds = Math.Max(15, Math.Min(86400, injuryRecovery));
+                        else if (key.Equals("IncapacitatedHealthPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int incapacitatedHealth))
+                            _incapacitatedHealthPercent = Math.Max(10, Math.Min(75, incapacitatedHealth));
+                        else if (key.Equals("MedicineHealingPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineHealing))
+                            _medicineHealingPercent = Math.Max(1, Math.Min(100, medicineHealing));
+                        else if (key.Equals("MedicineRecoveryReductionSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineReduction))
+                            _medicineRecoveryReductionSeconds = Math.Max(0, Math.Min(86400, medicineReduction));
+                        else if (key.Equals("RecruitMedicineCostCents", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineCost))
+                            _recruitMedicineCostCents = Math.Max(0, Math.Min(100000, medicineCost));
+                        else if (key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool restHealsInjuries))
+                            _restHealsInjuries = restHealsInjuries;
                     }
                 }
                 else
@@ -5104,7 +5168,15 @@ namespace EnRAGECompanionsExtension
                         "EnableIndividualOrders=true\r\n" +
                         "EnableWaitMode=true\r\n" +
                         "WaitRadius=8.0\r\n" +
-                        "RestDurationSeconds=60\r\n");
+                        "RestDurationSeconds=60\r\n" +
+                        "EnableInjurySystem=true\r\n" +
+                        "InjuryDamageThresholdPercent=10\r\n" +
+                        "InjuryRecoverySeconds=180\r\n" +
+                        "IncapacitatedHealthPercent=35\r\n" +
+                        "MedicineHealingPercent=100\r\n" +
+                        "MedicineRecoveryReductionSeconds=60\r\n" +
+                        "RecruitMedicineCostCents=100\r\n" +
+                        "RestHealsInjuries=true\r\n");
                 }
             }
             catch (Exception ex)
