@@ -1072,7 +1072,8 @@ namespace EnRAGECompanionsExtension
 
         private static void PreserveRecruitOutfit(object record, Ped ped)
         {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
+            if (!CompanionSystems.Settings.EnableAppearancePersistence || record == null ||
+                ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return;
 
@@ -1092,7 +1093,8 @@ namespace EnRAGECompanionsExtension
 
         private static void CaptureRecruitOutfitIfMissing(object record, Ped ped)
         {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
+            if (!CompanionSystems.Settings.EnableAppearancePersistence || record == null ||
+                ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return;
             uint existing;
@@ -3114,6 +3116,7 @@ namespace EnRAGECompanionsExtension
         {
             if (_roleOf == null || player == null || !player.Exists() || ped == null || !ped.Exists() ||
                 ped.IsDead || !ped.IsHuman || !IsMalePed(ped) || ped.Handle == player.Handle || ped.IsHogtied ||
+                IsCachedRecruitedPed(ped.Handle) ||
                 ped.IsInVehicle || ped.IsOnMount || PED.IS_PED_IN_COMBAT(ped.Handle, 0))
                 return false;
 
