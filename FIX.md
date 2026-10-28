@@ -151,7 +151,7 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 
 ### Fase 3 — órdenes individuales y descanso
 
-- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` cambia según el estado y `Descansar` tiene su prompt separado; los controles se distinguen del prompt `Dejar de seguirme` y del remedio.
+- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` usa el control de contexto secundario (F en el esquema predeterminado) y `Descansar` usa R; E se reserva para ayudar a levantarse estando incapacitado. Esto evita reutilizar E en las órdenes normales mientras se preserva el prompt nativo G.
 - `Quédate aquí` guarda coordenadas por ID estable de roster y evita que el ciclo normal `WaitToJoin/Ride` sobrescriba la tarea de espera. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
 - `Descansar` mantiene el anclaje durante `RestDurationSeconds`, intenta iniciar una escena de sentarse una sola vez, y vuelve a `Following` al terminar. La curación/limpieza de lesión depende de `RestHealsInjuries`. Si la API no expone el wrapper de escenario, se conserva el fallback de espera pasiva.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
