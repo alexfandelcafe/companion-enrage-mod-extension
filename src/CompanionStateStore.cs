@@ -206,16 +206,88 @@ namespace EnRAGECompanionsExtension
                     {
                         Emit("Migrated legacy companion state JSON into schema " + CurrentSchemaVersion + " after compatibility fallback.");
                     }
+                    else if (TryRestoreBackupState())
+                    {
+                        Emit("Recovered companion state from the backup after the primary state file could not be read.");
+                    }
                     else
                     {
+                        _states.Clear();
                         QuarantineCorruptStateFile();
-                        Emit("Could not load companion state; started with an empty state store. Details: " + ex.Message);
+                        Emit("Could not load companion state or its backup; started with an empty state store. Details: " + ex.Message);
                     }
                 }
+            }
+            else
+            {
+                // A crash can leave the primary file missing after the temp-file replacement path.
+                // Restore the last known-good snapshot rather than starting an empty roster state.
+                TryRestoreBackupState();
             }
 
             // Migration is additive: the old file is read but never deleted or rewritten.
             ImportLegacyOutfits();
+        }
+
+        private bool TryRestoreBackupState()
+        {
+            string backupPath = _statePath + ".bak";
+            if (!File.Exists(backupPath)) return false;
+
+            try
+            {
+                var serializer = new DataContractJsonSerializer(typeof(CompanionStateDocument));
+                CompanionStateDocument document;
+                using (var stream = new FileStream(backupPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    document = serializer.ReadObject(stream) as CompanionStateDocument;
+
+                if (document == null || document.SchemaVersion < 1 ||
+                    document.SchemaVersion > CurrentSchemaVersion)
+                    throw new InvalidDataException("Backup state schema is invalid or unsupported.");
+
+                var recoveredStates = new List<CompanionPersistentState>();
+                if (document.Companions != null)
+                {
+                    foreach (CompanionPersistentState state in document.Companions)
+                    {
+                        if (state == null) continue;
+                        string id = NormalizeId(state.RecordId);
+                        if (id.Length == 0) continue;
+                        state.Normalize(id);
+                        recoveredStates.Add(state);
+                    }
+                }
+
+                // Preserve the unreadable primary file before replacing it. If it cannot be
+                // moved, try copying it aside so the last recoverable bytes are not discarded.
+                if (File.Exists(_statePath))
+                {
+                    QuarantineCorruptStateFile();
+                    if (File.Exists(_statePath))
+                    {
+                        string quarantineCopy = _statePath + ".corrupt-copy-" +
+                            DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+                        File.Copy(_statePath, quarantineCopy, false);
+                    }
+                }
+
+                // Copy, rather than move, so the known-good backup remains available if the
+                // process exits before the recovered primary file is next saved.
+                File.Copy(backupPath, _statePath, true);
+
+                _states.Clear();
+                foreach (CompanionPersistentState state in recoveredStates)
+                    _states[state.RecordId] = state;
+                _dirty = false;
+                Emit("Recovered " + _states.Count + " companion state record(s) from " +
+                    Path.GetFileName(backupPath) + ".");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Emit("Could not recover companion state backup: " + ex.Message);
+                return false;
+            }
         }
 
         private bool TryImportLegacyStateDocument()
