@@ -20,6 +20,8 @@ namespace EnRAGECompanionsExtension
         [DataMember(Order = 7)] public int Affinity { get; set; }
         [DataMember(Order = 8)] public CompanionAppearanceState Appearance { get; set; }
         [DataMember(Order = 9)] public long LastUpdatedUtcTicks { get; set; }
+        // Kept separately from FollowState so a resting companion can resume/expire the rest timer.
+        [DataMember(Order = 10)] public long RestStartedUtcTicks { get; set; }
 
         public CompanionPersistentState()
         {
@@ -29,9 +31,10 @@ namespace EnRAGECompanionsExtension
             CombatStance = CompanionCombatStance.FollowOrders;
             SavedPosition = new CompanionSavedPosition();
             Injury = new CompanionInjuryState();
-            Affinity = 0;
+            Affinity = 50;
             Appearance = new CompanionAppearanceState();
             LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
+            RestStartedUtcTicks = 0;
         }
 
         public void Normalize(string recordId)
@@ -53,6 +56,8 @@ namespace EnRAGECompanionsExtension
             Affinity = Clamp(Affinity, 0, 100);
             if (LastUpdatedUtcTicks < 0 || LastUpdatedUtcTicks > DateTime.MaxValue.Ticks)
                 LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
+            if (RestStartedUtcTicks < 0 || RestStartedUtcTicks > DateTime.MaxValue.Ticks)
+                RestStartedUtcTicks = 0;
         }
 
         private static int Clamp(int value, int min, int max)
