@@ -124,6 +124,9 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastInjuryRecoveryAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastInjuryPersistAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static int _lastPlayerWeaponFireAt = -100000;
         private static readonly Dictionary<string, int> LastMedicineTransactionAt =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> RestScenarioStartedIds =
@@ -427,6 +430,7 @@ namespace EnRAGECompanionsExtension
             {
                 if (__args == null || __args.Length == 0 || !(__args[0] is Ped player) || player == null || !player.Exists())
                     return;
+                try { if (PED.IS_PED_SHOOTING(player.Handle)) _lastPlayerWeaponFireAt = Game.GameTime; } catch { }
 
                 // The built-in Van der Linde faction has a separate StoryRoster; normal/custom factions
                 // appear through Roster filtered by each record's Gang ID. Exclusions are maintained for both.
@@ -2770,7 +2774,7 @@ namespace EnRAGECompanionsExtension
         {
             try
             {
-                if (player == null || !player.Exists() || player.IsInCombat)
+                if (player == null || !player.Exists())
                 {
                     HideIncapacitatedPrompt();
                     return;
@@ -3568,8 +3572,12 @@ namespace EnRAGECompanionsExtension
 
             bool playerFiring = false;
             try { playerFiring = PED.IS_PED_SHOOTING(player.Handle); } catch { }
-            if (playerFiring && !string.IsNullOrWhiteSpace(stanceId))
-                LastPlayerFireAtById[stanceId] = now;
+            if (playerFiring)
+            {
+                _lastPlayerWeaponFireAt = now;
+                if (!string.IsNullOrWhiteSpace(stanceId))
+                    LastPlayerFireAtById[stanceId] = now;
+            }
 
             if (stance == CompanionCombatStance.HoldPosition)
             {
@@ -3598,6 +3606,7 @@ namespace EnRAGECompanionsExtension
             {
                 int lastPlayerFire;
                 bool recentPlayerFire = playerFiring ||
+                    (now >= _lastPlayerWeaponFireAt && now - _lastPlayerWeaponFireAt <= 2500) ||
                     (!string.IsNullOrWhiteSpace(stanceId) &&
                      LastPlayerFireAtById.TryGetValue(stanceId, out lastPlayerFire) &&
                      now >= lastPlayerFire && now - lastPlayerFire <= 2500);
@@ -4749,7 +4758,13 @@ namespace EnRAGECompanionsExtension
             // previously saved non-zero hash rather than replacing it with an invalid value.
             if (ped != null && ped.Exists()) CaptureRecruitOutfitIfMissing(GetField(companion, "Rec"), ped, true);
             SetPersistentFollowState(GetField(companion, "Rec"), CompanionFollowState.Dismissed, null);
-            LastIndividualOrderTaskAt.Remove(GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty);
+            string dismissedId = GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty;
+            LastIndividualOrderTaskAt.Remove(dismissedId);
+            RestScenarioStartedIds.Remove(dismissedId);
+            LastObservedHealthById.Remove(dismissedId);
+            LastDamageAtById.Remove(dismissedId);
+            LastHealthSampleAtById.Remove(dismissedId);
+            LastInjuryRecoveryAtById.Remove(dismissedId);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
@@ -4806,7 +4821,7 @@ namespace EnRAGECompanionsExtension
 
         private static bool MaintainCompanionCondition(object instance, object companion, Ped player)
         {
-            if (!_enableIndividualOrders || companion == null) return false;
+            if (companion == null) return false;
             string key = GetField(companion, "Key") as string;
             if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return false;
             object record = GetField(companion, "Rec");
@@ -4913,8 +4928,11 @@ namespace EnRAGECompanionsExtension
             LastInjuryRecoveryAtById[id] = last + elapsedSeconds * 1000;
             state.Injury.RecoverySecondsRemaining = Math.Max(0, state.Injury.RecoverySecondsRemaining - elapsedSeconds);
             bool recovered = state.Injury.RecoverySecondsRemaining <= 0;
-            // Avoid writing the JSON every frame; persistence is updated in coarse intervals.
-            if (elapsedSeconds >= 5 || recovered)
+            // Avoid writing the JSON every frame; persist the countdown at five-second intervals.
+            int lastPersistAt;
+            bool persistDue = !LastInjuryPersistAtById.TryGetValue(id, out lastPersistAt) ||
+                now < lastPersistAt || now - lastPersistAt >= 5000;
+            if (persistDue || recovered)
             {
                 if (recovered)
                 {
@@ -4923,6 +4941,7 @@ namespace EnRAGECompanionsExtension
                     state.Injury.FirstInjuredUtcTicks = 0;
                 }
                 SavePersistentState(state);
+                LastInjuryPersistAtById[id] = now;
                 if (recovered)
                     Log("Companion injury recovery completed for " + id + ".");
             }
