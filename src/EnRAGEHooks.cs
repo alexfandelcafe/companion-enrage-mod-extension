@@ -338,32 +338,60 @@ namespace EnRAGECompanionsExtension
                     return;
                 }
 
-                // Build a prefix with the exact runtime enum type without taking a compile-time
-                // reference to NemesisMod.dll. Intent.None is enum value 3 in the inspected build.
-                Type intentType = intentOf.ReturnType;
-                DynamicMethod prefix = new DynamicMethod(
-                    "ExtensionRecruitIntentNonePrefix",
-                    typeof(bool),
-                    new[] { recordType, intentType.MakeByRefType() },
-                    typeof(EnRAGEHooks),
-                    true);
+                PropertyInfo idProperty = recordType.GetProperty("Id", BindingFlags.Instance | BindingFlags.Public);
+                MethodInfo getId = idProperty == null ? null : idProperty.GetGetMethod();
+                MethodInfo startsWith = typeof(string).GetMethod("StartsWith", new[] { typeof(string), typeof(StringComparison) });
+                if (getId == null || startsWith == null)
+                {
+                    Log("Intent override unavailable; NemesisRecord.Id getter or string comparison method was not found.");
+                    return;
+                }
+
+                // Generate a prefix with exact runtime argument/enum types, without taking a compile-time
+                // reference to NemesisMod.dll. Extension recruits use stable extcomp_/extvdl_ IDs.
+                AssemblyBuilder assembly = AppDomain.CurrentDomain.DefineDynamicAssembly(
+                    new AssemblyName("EnRAGECompanionIntentRuntime_" + Guid.NewGuid().ToString("N")),
+                    AssemblyBuilderAccess.Run);
+                ModuleBuilder module = assembly.DefineDynamicModule("IntentPrefixModule");
+                TypeBuilder type = module.DefineType("IntentPrefix", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
+                MethodBuilder prefix = type.DefineMethod("Prefix", MethodAttributes.Public | MethodAttributes.Static,
+                    typeof(bool), new[] { recordType, intentOf.ReturnType.MakeByRefType() });
                 prefix.DefineParameter(1, ParameterAttributes.None, "__0");
                 prefix.DefineParameter(2, ParameterAttributes.None, "__result");
+
                 ILGenerator il = prefix.GetILGenerator();
-                Label runOriginal = il.DefineLabel();
+                LocalBuilder id = il.DeclareLocal(typeof(string));
+                Label original = il.DefineLabel();
+                Label extensionRecord = il.DefineLabel();
                 il.Emit(OpCodes.Ldarg_0);
-                il.Emit(OpCodes.Call, typeof(EnRAGEHooks).GetMethod(nameof(IsRecruitedRosterRecord), StaticFlags));
-                il.Emit(OpCodes.Brfalse_S, runOriginal);
+                il.Emit(OpCodes.Callvirt, getId);
+                il.Emit(OpCodes.Stloc, id);
+                il.Emit(OpCodes.Ldloc, id);
+                il.Emit(OpCodes.Brfalse_S, original);
+
+                il.Emit(OpCodes.Ldloc, id);
+                il.Emit(OpCodes.Ldstr, "extcomp_");
+                il.Emit(OpCodes.Ldc_I4, (int)StringComparison.OrdinalIgnoreCase);
+                il.Emit(OpCodes.Callvirt, startsWith);
+                il.Emit(OpCodes.Brtrue_S, extensionRecord);
+                il.Emit(OpCodes.Ldloc, id);
+                il.Emit(OpCodes.Ldstr, "extvdl_");
+                il.Emit(OpCodes.Ldc_I4, (int)StringComparison.OrdinalIgnoreCase);
+                il.Emit(OpCodes.Callvirt, startsWith);
+                il.Emit(OpCodes.Brfalse_S, original);
+
+                il.MarkLabel(extensionRecord);
                 il.Emit(OpCodes.Ldarg_1);
-                il.Emit(OpCodes.Ldc_I4, Convert.ToInt32(Enum.Parse(intentType, "None"), CultureInfo.InvariantCulture));
+                il.Emit(OpCodes.Ldc_I4, Convert.ToInt32(Enum.Parse(intentOf.ReturnType, "None"), CultureInfo.InvariantCulture));
                 il.Emit(OpCodes.Stind_I4);
                 il.Emit(OpCodes.Ldc_I4_0);
                 il.Emit(OpCodes.Ret);
-                il.MarkLabel(runOriginal);
+                il.MarkLabel(original);
                 il.Emit(OpCodes.Ldc_I4_1);
                 il.Emit(OpCodes.Ret);
 
-                _harmony.Patch(intentOf, prefix: new HarmonyMethod(prefix));
+                Type prefixType = type.CreateType();
+                _harmony.Patch(intentOf, prefix: new HarmonyMethod(prefixType.GetMethod("Prefix")));
                 Log("Installed targeted Intent.None override for extension-recruited roster records.");
             }
             catch (Exception ex)
