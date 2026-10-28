@@ -3856,7 +3856,7 @@ namespace EnRAGECompanionsExtension
                 ApplyAmbientReleasedCombatProfile(ped);
                 CustomCompanionCombatTargets.Remove(ped.Handle);
                 CustomCombatSuppressedAt.Remove(ped.Handle);
-                if (CompanionSystems.Settings.EnableWaitMode)
+                if (CompanionSystems.Settings.EnableIndividualOrders && CompanionSystems.Settings.EnableWaitMode)
                 {
                     AmbientReleasedRecruitPeds.Remove(ped.Handle);
                     AmbientReleasedWanderAt.Remove(ped.Handle);
