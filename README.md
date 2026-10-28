@@ -80,7 +80,7 @@ La postura individual se guarda en el estado persistente. Se aplican filtros adi
 
 ### Afinidad
 
-La confianza se guarda por ID estable en una escala de **0 a 100**, comienza en 50 para registros nuevos y sube en intervalos de viaje válido, eventos de combate y tratamientos. El sistema limita las ganancias para evitar aumentos cada frame.
+La confianza se guarda por ID estable en una escala de **0 a 100**, comienza en 50 para registros nuevos y sube en intervalos de viaje válido, eventos de combate y tratamientos. La ganancia por viaje requiere tiempo válido (300 segundos por defecto), al menos 50 m acumulados de movimiento mientras el compañero está activo y cerca del jugador, y ausencia de combate. Esto evita que quedarse quieto al lado del NPC aumente la confianza.
 
 En esta rama, la confianza se muestra como una acción seleccionable **«Confianza: n/100»** en la lista de acciones de la ficha; al seleccionarla se muestra el valor en un subtítulo. No se afirma que se haya insertado una fila dentro del panel gráfico original de `RosterMenu.DrawDetail()`, cuyo dibujo interno no se ha modificado.
 
