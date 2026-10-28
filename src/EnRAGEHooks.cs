@@ -1673,13 +1673,22 @@ namespace EnRAGECompanionsExtension
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return;
             uint existing;
-            if (!overwriteExisting && TryGetSavedRecruitOutfitHash(record, out existing) && existing != 0U) return;
+            if (!overwriteExisting && TryGetSavedRecruitOutfitHash(record, out existing) && existing != 0U)
+            {
+                // The full outfit hash may exist while individual variation slots were not captured
+                // by an older build. Capture those standard native component slots additively.
+                CaptureRecruitClothingComponents(record, ped, false);
+                return;
+            }
 
             uint outfitHash;
-            if (!TryGetMetaPedOutfitHash(ped, out outfitHash) || outfitHash == 0U)
+            bool hasOutfitHash = TryGetMetaPedOutfitHash(ped, out outfitHash) && outfitHash != 0U;
+            if (!hasOutfitHash)
             {
+                CaptureRecruitClothingComponents(record, ped, overwriteExisting);
                 if (OutfitCaptureFailureLogged.Add(id))
-                    Log("Could not capture the current meta-ped outfit for record " + id + "; native outfit hash was unavailable/zero. Will retry while enRAGE still resolves this recruit.");
+                    Log("Could not capture the current meta-ped outfit hash for record " + id +
+                        "; individual component variations were still captured when the installed API exposed them.");
                 return;
             }
 
@@ -1693,9 +1702,11 @@ namespace EnRAGECompanionsExtension
                 savedState.Appearance.LegacyOutfitHash = outfitHash;
                 SavePersistentState(savedState);
             }
+            CaptureRecruitClothingComponents(record, ped, overwriteExisting);
             SavePersistentRecruitOutfits();
-            Log("Saved outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
-                (GetMember(record, "Name") as string ?? id) + " (record=" + id + ").");
+            Log("Saved meta-ped outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) +
+                " and available component variations for " + (GetMember(record, "Name") as string ?? id) +
+                " (record=" + id + ").");
         }
 
         private static bool TryGetSavedRecruitOutfitHash(object record, out uint outfitHash)
@@ -1719,21 +1730,154 @@ namespace EnRAGECompanionsExtension
         {
             if (!_enableAppearancePersistence || !_preserveSavedOutfit || record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
-            uint outfitHash;
-            if (string.IsNullOrWhiteSpace(id) || !TryGetSavedRecruitOutfitHash(record, out outfitHash) || outfitHash == 0U)
-                return;
+            if (string.IsNullOrWhiteSpace(id)) return;
 
             try
             {
-                if (!TryEquipMetaPedOutfitHash(ped, outfitHash))
-                {
+                uint outfitHash;
+                bool hasHash = TryGetSavedRecruitOutfitHash(record, out outfitHash) && outfitHash != 0U;
+                if (hasHash && !TryEquipMetaPedOutfitHash(ped, outfitHash))
                     Log("Could not restore saved meta-ped outfit for record " + id + "; compatible outfit native was unavailable.");
+                bool componentsApplied = ApplySavedRecruitClothingComponents(record, ped);
+                if (hasHash)
+                    Log("Restored meta-ped outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
+                        (GetMember(record, "Name") as string ?? id) + " (ped=" + ped.Handle + ").");
+                else if (!componentsApplied)
                     return;
-                }
-                Log("Restored outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
-                    (GetMember(record, "Name") as string ?? id) + " (ped=" + ped.Handle + ").");
+
+                // If a hash is present but no slots were saved by an earlier revision, capture the
+                // visible components after the outfit has been applied so future recalls keep them.
+                CompanionPersistentState appearanceState = GetPersistentState(record, false);
+                if (appearanceState == null || appearanceState.Appearance == null ||
+                    appearanceState.Appearance.ClothingComponents == null || appearanceState.Appearance.ClothingComponents.Count == 0)
+                    CaptureRecruitClothingComponents(record, ped, false);
             }
             catch (Exception ex) { Log("Recruit outfit restore warning for " + id + ": " + Unwrap(ex)); }
+        }
+
+        private static void CaptureRecruitClothingComponents(object record, Ped ped, bool overwriteExisting)
+        {
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists() || ped.IsDead)
+                return;
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) return;
+            if (state.Appearance == null) state.Appearance = new CompanionAppearanceState();
+            if (!overwriteExisting && state.Appearance.ClothingComponents != null &&
+                state.Appearance.ClothingComponents.Count > 0)
+                return;
+
+            List<CompanionClothingComponent> snapshot = new List<CompanionClothingComponent>();
+            for (int component = 0; component < 16; component++)
+            {
+                int drawable, texture, palette;
+                if (!TryGetPedComponentVariation(ped, component, out drawable, out texture, out palette))
+                    continue;
+                if (drawable < 0 || texture < 0 || palette < 0) continue;
+                snapshot.Add(new CompanionClothingComponent
+                {
+                    ComponentId = component,
+                    DrawableHash = unchecked((uint)drawable),
+                    TextureHash = unchecked((uint)texture),
+                    PaletteHash = unchecked((uint)palette)
+                });
+            }
+
+            if (snapshot.Count == 0) return;
+            state.Appearance.ClothingComponents = snapshot;
+            SavePersistentState(state);
+            Log("Saved " + snapshot.Count + " native clothing component variation(s) for " +
+                (GetMember(record, "Name") as string ?? GetMember(record, "Id") as string) + ".");
+        }
+
+        private static bool TryGetPedComponentVariation(Ped ped, int componentId,
+            out int drawable, out int texture, out int palette)
+        {
+            drawable = texture = palette = -1;
+            if (ped == null || !ped.Exists()) return false;
+            MethodInfo getDrawable = FindPedNative(new[] { "GET_PED_DRAWABLE_VARIATION" }, 2,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType));
+            MethodInfo getTexture = FindPedNative(new[] { "GET_PED_TEXTURE_VARIATION" }, 2,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType));
+            MethodInfo getPalette = FindPedNative(new[] { "GET_PED_PALETTE_VARIATION" }, 2,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType));
+            if (getDrawable == null || getTexture == null || getPalette == null) return false;
+
+            try
+            {
+                drawable = ReadPedComponentIndex(getDrawable, ped.Handle, componentId);
+                texture = ReadPedComponentIndex(getTexture, ped.Handle, componentId);
+                palette = ReadPedComponentIndex(getPalette, ped.Handle, componentId);
+                return drawable >= 0 && texture >= 0 && palette >= 0;
+            }
+            catch (Exception ex)
+            {
+                Log("Ped component variation read failed for slot " + componentId + ": " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        private static int ReadPedComponentIndex(MethodInfo getter, int pedHandle, int componentId)
+        {
+            ParameterInfo[] parameters = getter.GetParameters();
+            object result = getter.Invoke(null, new[]
+            {
+                ConvertNativeInteger(pedHandle, parameters[0].ParameterType),
+                ConvertNativeInteger(componentId, parameters[1].ParameterType)
+            });
+            return Convert.ToInt32(result, CultureInfo.InvariantCulture);
+        }
+
+        private static bool ApplySavedRecruitClothingComponents(object record, Ped ped)
+        {
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists()) return false;
+            CompanionPersistentState state = GetPersistentState(record, false);
+            List<CompanionClothingComponent> components = state == null || state.Appearance == null
+                ? null : state.Appearance.ClothingComponents;
+            if (components == null || components.Count == 0) return false;
+
+            MethodInfo setter = FindPedNative(new[] { "SET_PED_COMPONENT_VARIATION" }, 5,
+                p => p.All(parameter => IsNativeInteger(parameter.ParameterType)));
+            if (setter == null)
+            {
+                Log("ScriptHook wrapper for SET_PED_COMPONENT_VARIATION unavailable; saved per-slot outfit data was retained but not applied.");
+                return false;
+            }
+
+            int applied = 0;
+            try
+            {
+                ParameterInfo[] parameters = setter.GetParameters();
+                foreach (CompanionClothingComponent component in components)
+                {
+                    if (component == null || component.ComponentId < 0 || component.ComponentId > 15) continue;
+                    setter.Invoke(null, new object[]
+                    {
+                        ConvertNativeInteger(ped.Handle, parameters[0].ParameterType),
+                        ConvertNativeInteger(component.ComponentId, parameters[1].ParameterType),
+                        ConvertNativeInteger(component.DrawableHash, parameters[2].ParameterType),
+                        ConvertNativeInteger(component.TextureHash, parameters[3].ParameterType),
+                        ConvertNativeInteger(component.PaletteHash, parameters[4].ParameterType)
+                    });
+                    applied++;
+                }
+
+                MethodInfo update = FindPedNative(new[] { "_UPDATE_PED_VARIATION", "UPDATE_PED_VARIATION" }, 6,
+                    p => IsNativeInteger(p[0].ParameterType) && p.Skip(1).All(parameter => parameter.ParameterType == typeof(bool)));
+                if (update != null)
+                {
+                    ParameterInfo[] updateParameters = update.GetParameters();
+                    update.Invoke(null, new object[]
+                    {
+                        ConvertNativeInteger(ped.Handle, updateParameters[0].ParameterType), false, true, true, true, false
+                    });
+                }
+                return applied > 0;
+            }
+            catch (Exception ex)
+            {
+                Log("Applying saved ped component variations failed: " + Unwrap(ex));
+                return applied > 0;
+            }
         }
 
         private static bool TryGetMetaPedOutfitHash(Ped ped, out uint outfitHash)
