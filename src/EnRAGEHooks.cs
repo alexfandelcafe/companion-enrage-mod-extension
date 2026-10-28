@@ -616,7 +616,8 @@ namespace EnRAGECompanionsExtension
                 if (recruitedRecord)
                 {
                     __result.RemoveAll(x => x != null && x.StartsWith("Confianza: ", StringComparison.Ordinal));
-                    InsertBeforeBack(__result, "Confianza: " + CompanionSystems.GetAffinity(id).ToString(CultureInfo.InvariantCulture) + "/100");
+                    if (CompanionSystems.Settings.EnableAffinity)
+                        InsertBeforeBack(__result, "Confianza: " + CompanionSystems.GetAffinity(id).ToString(CultureInfo.InvariantCulture) + "/100");
                     __result.Remove("Llamarlo");
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
                         InsertBeforeBack(__result, "Llamarlo");
@@ -1085,7 +1086,8 @@ namespace EnRAGECompanionsExtension
             }
             if (savedHash != 0U)
             {
-                ApplySavedRecruitOutfit(record, ped);
+                if (CompanionSystems.Settings.PreserveSavedOutfit)
+                    ApplySavedRecruitOutfit(record, ped);
                 return;
             }
             CaptureRecruitOutfitIfMissing(record, ped);
@@ -1119,6 +1121,7 @@ namespace EnRAGECompanionsExtension
         private static void ApplySavedRecruitOutfit(object record, Ped ped)
         {
             if (!CompanionSystems.Settings.EnableAppearancePersistence ||
+                !CompanionSystems.Settings.PreserveSavedOutfit ||
                 record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             uint outfitHash;
@@ -2027,9 +2030,11 @@ namespace EnRAGECompanionsExtension
                     state.Order == CompanionOrder.ReturningToAnchor ||
                     state.Stance == CompanionCombatStance.HoldPosition ||
                     state.Stance == CompanionCombatStance.ProtectArea;
+                string followLabel = held ? "Seguirme" :
+                    (CompanionSystems.Settings.EnableWaitMode ? "Esperar aquí" : null);
 
                 if (UpdateCompanionOrderPromptSlot("follow", target, id, group, CompanionFollowOrderControl,
-                    held ? "Seguirme" : "Esperar aquí", out bool followCompleted) && followCompleted)
+                    followLabel, out bool followCompleted) && followCompleted)
                 {
                     CompanionSystems.ToggleWaitFollow(id, target);
                     InvokeInstance(instance, "ShowSubtitle", held ? "El compañero vuelve a seguirte." : "El compañero esperará aquí.");
