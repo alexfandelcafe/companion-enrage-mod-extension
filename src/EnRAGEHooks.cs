@@ -895,41 +895,58 @@ namespace EnRAGECompanionsExtension
             }
 
             Ped ped = targetedPed;
-            if (ped != null && ped.Health >= ped.MaxHealth)
+            bool injured = CompanionSystems.IsInjured(id);
+            if (ped.Health >= ped.MaxHealth && !injured)
             {
                 if (PendingFullHealthIds.Remove(id))
                     SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-                InvokeInstance(instance, "ShowSubtitle", name + " ya tiene la salud al máximo.");
+                InvokeInstance(instance, "ShowSubtitle", name + " no necesita tratamiento.");
                 return;
             }
 
-            int cash;
-            try { cash = MONEY._MONEY_GET_CASH_BALANCE(); }
-            catch (Exception ex)
+            int treatmentCost = CompanionSystems.TreatmentCostCents;
+            if (treatmentCost > 0)
             {
-                Log("Medicine cash balance read failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo comprobar el dinero disponible.");
-                return;
-            }
-            if (cash < RecruitMedicineCostCents)
-            {
-                InvokeInstance(instance, "ShowSubtitle", "Necesitas 1 dólar para comprar el remedio.");
-                return;
+                int cash;
+                try { cash = MONEY._MONEY_GET_CASH_BALANCE(); }
+                catch (Exception ex)
+                {
+                    Log("Medicine cash balance read failed: " + Unwrap(ex));
+                    InvokeInstance(instance, "ShowSubtitle", "No se pudo comprobar el dinero disponible.");
+                    return;
+                }
+                if (cash < treatmentCost)
+                {
+                    InvokeInstance(instance, "ShowSubtitle", "No tienes dinero suficiente para el tratamiento.");
+                    return;
+                }
+
+                try { MONEY._MONEY_DECREMENT_CASH_BALANCE(treatmentCost); }
+                catch (Exception ex)
+                {
+                    Log("Medicine payment failed: " + Unwrap(ex));
+                    InvokeInstance(instance, "ShowSubtitle", "No se pudo cobrar el tratamiento; no se aplicó la cura.");
+                    return;
+                }
             }
 
-            try { MONEY._MONEY_DECREMENT_CASH_BALANCE(RecruitMedicineCostCents); }
-            catch (Exception ex)
+            int maxHealth = ped.MaxHealth;
+            if (maxHealth > 0 && ped.Health < maxHealth)
             {
-                Log("Medicine payment failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo cobrar el remedio; no se aplicó la curación.");
-                return;
+                float fraction = CompanionSystems.TreatmentHealthFraction;
+                int restoredHealth = fraction >= 1.0f
+                    ? maxHealth
+                    : Math.Min(maxHealth, ped.Health + (int)Math.Ceiling((maxHealth - ped.Health) * fraction));
+                ped.Health = Math.Max(ped.Health, restoredHealth);
             }
 
-            HealPedToMaximum(ped);
+            CompanionSystems.OnTreatment(id);
             PendingFullHealthIds.Remove(id);
             SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-            InvokeInstance(instance, "ShowSubtitle", name + " recuperó toda su salud. Coste: 1 dólar.");
-            Log("Applied contextual medicine to " + name + " (record=" + id + ").");
+            string priceText = treatmentCost == 0 ? "sin coste" :
+                (treatmentCost / 100.0).ToString("0.##", CultureInfo.InvariantCulture) + " dólares";
+            InvokeInstance(instance, "ShowSubtitle", name + " recibió tratamiento. Coste: " + priceText + ".");
+            Log("Applied contextual treatment to " + name + " (record=" + id + ", cost=" + treatmentCost + " cents, injured=" + injured + ").");
         }
 
         private static Ped FindLivePedForRosterRecord(object instance, object record, string id)
@@ -1834,7 +1851,7 @@ namespace EnRAGECompanionsExtension
                 {
                     HideRecruitMedicinePrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, RecruitMedicinePromptControl);
-                    object result = _makePrompt.Invoke(null, new object[] { control, "Dar remedio ($1)", true, group });
+                    object result = _makePrompt.Invoke(null, new object[] { control, MedicinePromptLabel(), true, group });
                     _medicinePrompt = Convert.ToInt32(result);
                     _medicinePromptFor = target.Handle;
                     _medicinePromptGroup = group;
@@ -1921,6 +1938,13 @@ namespace EnRAGECompanionsExtension
                 catch (Exception ex) { Log("Social-target medicine fallback warning: " + Unwrap(ex)); }
             }
             return null;
+        }
+
+        private static string MedicinePromptLabel()
+        {
+            int cents = CompanionSystems.TreatmentCostCents;
+            if (cents == 100) return "Dar remedio ($1)";
+            return "Dar remedio ($" + (cents / 100.0).ToString("0.##", CultureInfo.InvariantCulture) + ")";
         }
 
         private static void HideRecruitMedicinePrompt()
