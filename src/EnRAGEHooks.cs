@@ -72,6 +72,12 @@ namespace EnRAGECompanionsExtension
         private static int _affinityTreatmentGain = 3;
         private static bool _enableAppearancePersistence = true;
         private static bool _preserveSavedOutfit = true;
+        private static bool _enableIndividualOrders = true;
+        private static bool _enableWaitMode = true;
+        private static float _waitRadius = 8.0f;
+        private static int _restDurationSeconds = 60;
+        private static readonly Dictionary<string, int> LastIndividualOrderTaskAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static Type _uiDrawType;
         private static MethodInfo _uiDrawRect;
         private static MethodInfo _uiDrawText;
@@ -349,6 +355,10 @@ namespace EnRAGECompanionsExtension
                         continue;
 
                     MarkRecruitedCompanionDeath(__instance, companion);
+                    // Persistent individual orders must take precedence over enRAGE's default
+                    // WaitToJoin/Ride tasks, otherwise those tasks overwrite the hold/rest task.
+                    if (MaintainIndividualCompanionOrder(__instance, companion, player))
+                        continue;
                     int state = GetFieldInt(companion, "State", -1);
                     switch (state)
                     {
@@ -738,12 +748,37 @@ namespace EnRAGECompanionsExtension
                 if (recruitedRecord)
                 {
                     __result.RemoveAll(action => action != null &&
-                        action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0);
+                        (action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         action == "Sígueme" || action == "Quédate aquí" ||
+                         action.StartsWith("Descansar", StringComparison.OrdinalIgnoreCase)));
                     if (_enableAffinity)
                     {
                         InsertBeforeBack(__result, "Mejorar afinidad (+10)");
                         InsertBeforeBack(__result, "Reducir afinidad (-10)");
                     }
+
+                    if (_enableIndividualOrders && anyCompanionFollowing)
+                    {
+                        CompanionPersistentState individualState = GetPersistentState(record, true);
+                        CompanionFollowState followState = individualState == null
+                            ? CompanionFollowState.Following
+                            : individualState.FollowState;
+                        if (followState == CompanionFollowState.Waiting)
+                        {
+                            InsertBeforeBack(__result, "Sígueme");
+                            InsertBeforeBack(__result, "Descansar");
+                        }
+                        else if (followState == CompanionFollowState.Resting)
+                        {
+                            InsertBeforeBack(__result, "Sígueme");
+                        }
+                        else
+                        {
+                            if (_enableWaitMode) InsertBeforeBack(__result, "Quédate aquí");
+                            InsertBeforeBack(__result, "Descansar");
+                        }
+                    }
+
                     __result.Remove("Llamarlo");
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
                         InsertBeforeBack(__result, "Llamarlo");
@@ -844,6 +879,21 @@ namespace EnRAGECompanionsExtension
                 if (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)")
                 {
                     AdjustAffinityFromRoster(_latestMainInstance, record, action == "Mejorar afinidad (+10)" ? 10 : -10);
+                    return false;
+                }
+                if (action == "Sígueme" && recruitedRecord && _enableIndividualOrders)
+                {
+                    SetIndividualCompanionOrder(_latestMainInstance, record, CompanionFollowState.Following);
+                    return false;
+                }
+                if (action == "Quédate aquí" && recruitedRecord && _enableIndividualOrders && _enableWaitMode)
+                {
+                    SetIndividualCompanionOrder(_latestMainInstance, record, CompanionFollowState.Waiting);
+                    return false;
+                }
+                if (action == "Descansar" && recruitedRecord && _enableIndividualOrders)
+                {
+                    SetIndividualCompanionOrder(_latestMainInstance, record, CompanionFollowState.Resting);
                     return false;
                 }
                 if (ExiledRosterIds.Contains(recordIdForConfirmation))
@@ -1627,12 +1677,18 @@ namespace EnRAGECompanionsExtension
 
                 Ped ped = GetField(companion, "Ped") as Ped;
                 if (ped != null && ped.Exists()) ApplyRecruitedPedIdentity(instance, record, ped);
-                Ped horse = GetField(companion, "Horse") as Ped;
-                if (ped != null && ped.Exists() && horse != null && horse.Exists() && !horse.IsDead && !ped.IsOnMount)
-                {
-                    try { TASK.TASK_MOUNT_ANIMAL(ped.Handle, horse.Handle, 20000, -1, 2f, 1, 0UL, 0UL); } catch { }
-                }
+
+                // Do not issue TASK_MOUNT_ANIMAL here. It interrupts enRAGE's WaitToJoin/Ride
+                // follow-up task, leaving a recalled NPC mounted but idle. The normal companion
+                // cycle owns mounting and movement after Adopt/SpawnCompanion.
                 ApplyMaximumRecruitFriendship(record);
+                SetPersistentFollowState(record, CompanionFollowState.Following, null);
+                object activeCompanion = FindActiveExtensionCompanion(instance, id);
+                if (activeCompanion != null)
+                {
+                    SetField(activeCompanion, "State", 0);
+                    SetField(activeCompanion, "AskedAt", Game.GameTime);
+                }
                 try { InvokeInstance(instance, "SaveRoster"); } catch { }
                 InvokeInstance(instance, "ShowSubtitle", existingPed != null
                     ? name + " ha vuelto; viene hacia ti a caballo."
