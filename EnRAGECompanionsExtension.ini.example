@@ -17,7 +17,8 @@ AffinityTravelIntervalSeconds=300
 AffinityTravelGain=1
 AffinityCombatGain=2
 AffinityTreatmentGain=3
-; Capture and reapply the current RDR2 meta-ped outfit hash when available.
+; Capture/reapply outfit hash, standard clothing slots, hat/accessory props, and current equipped weapon hash when wrappers exist.
+; Not full YMT XML/material persistence or a full weapon inventory snapshot.
 EnableAppearancePersistence=true
 PreserveSavedOutfit=true
 ; Individual companion orders and wait/rest behavior.
@@ -25,3 +26,16 @@ EnableIndividualOrders=true
 EnableWaitMode=true
 WaitRadius=8.0
 RestDurationSeconds=60
+; Injury detection and recovery countdown for active extension companions.
+EnableInjurySystem=true
+InjuryDamageThresholdPercent=10
+InjuryRecoverySeconds=180
+; Health percentage restored when an incapacitated recruit is helped up.
+IncapacitatedHealthPercent=35
+; Healing percentage and injury-recovery reduction provided by a paid treatment.
+MedicineHealingPercent=100
+MedicineRecoveryReductionSeconds=60
+; Medicine price in cents; 100 = $1.00, 0 = free.
+RecruitMedicineCostCents=100
+; Whether completed rest clears injuries and restores health.
+RestHealsInjuries=true
