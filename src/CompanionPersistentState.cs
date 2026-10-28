@@ -176,20 +176,27 @@ namespace EnRAGECompanionsExtension
         [DataMember(Order = 3)] public List<CompanionClothingComponent> ClothingComponents { get; set; }
         [DataMember(Order = 4)] public uint? HatComponentHash { get; set; }
         [DataMember(Order = 5)] public List<uint> WeaponHashes { get; set; }
+        // Props are separate from clothing components; prop slot 0 is commonly the hat.
+        [DataMember(Order = 6)] public List<CompanionPedProp> PedProps { get; set; }
 
         public CompanionAppearanceState()
         {
             ClothingComponents = new List<CompanionClothingComponent>();
             WeaponHashes = new List<uint>();
+            PedProps = new List<CompanionPedProp>();
         }
 
         public void Normalize()
         {
             if (ClothingComponents == null) ClothingComponents = new List<CompanionClothingComponent>();
             if (WeaponHashes == null) WeaponHashes = new List<uint>();
+            if (PedProps == null) PedProps = new List<CompanionPedProp>();
             if (ClothingComponents.Count > 64) ClothingComponents.RemoveRange(64, ClothingComponents.Count - 64);
             if (WeaponHashes.Count > 32) WeaponHashes.RemoveRange(32, WeaponHashes.Count - 32);
+            if (PedProps.Count > 16) PedProps.RemoveRange(16, PedProps.Count - 16);
             ClothingComponents.RemoveAll(x => x == null || x.ComponentId < 0 || x.ComponentId > 255);
+            PedProps.RemoveAll(x => x == null || x.PropId < 0 || x.PropId > 15 ||
+                x.DrawableId < -1 || x.TextureId < 0);
         }
     }
 
@@ -200,5 +207,14 @@ namespace EnRAGECompanionsExtension
         [DataMember(Order = 2)] public uint DrawableHash { get; set; }
         [DataMember(Order = 3)] public uint TextureHash { get; set; }
         [DataMember(Order = 4)] public uint PaletteHash { get; set; }
+    }
+
+    [DataContract]
+    public sealed class CompanionPedProp
+    {
+        [DataMember(Order = 1)] public int PropId { get; set; }
+        // -1 means the NPC had no prop in that slot when the snapshot was captured.
+        [DataMember(Order = 2)] public int DrawableId { get; set; }
+        [DataMember(Order = 3)] public int TextureId { get; set; }
     }
 }
