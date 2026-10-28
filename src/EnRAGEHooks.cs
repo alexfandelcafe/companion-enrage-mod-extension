@@ -1995,25 +1995,32 @@ namespace EnRAGECompanionsExtension
             return true;
         }
 
-        private static void NormalizeExtensionRecruitHistory(object record)
+        private static bool NormalizeExtensionRecruitHistory(object record)
         {
-            if (record == null) return;
+            if (record == null) return false;
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id) ||
                 !(id.StartsWith("extcomp_", StringComparison.OrdinalIgnoreCase) ||
-                  id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase))) return;
+                  id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase))) return false;
 
             int kills = 0;
             try { kills = Convert.ToInt32(GetMember(record, "TimesKilledPlayer"), CultureInfo.InvariantCulture); } catch { }
             // Only repair the default/fabricated kill marker when the actual kill counter is zero.
             // Records with a genuine recorded player kill are left untouched.
-            if (kills == 0)
-            {
-                SetEnumMember(record, "Origin", "GangMember");
-                SetMember(record, "KillLocation", string.Empty);
-                SetMember(record, "KilledPlayerAt", DateTime.MinValue);
-                SetMember(record, "KilledByPlayer", false);
-            }
+            if (kills != 0) return false;
+
+            bool changed = false;
+            object origin = GetMember(record, "Origin");
+            if (!string.Equals(origin == null ? string.Empty : origin.ToString(), "GangMember", StringComparison.OrdinalIgnoreCase))
+                changed |= SetEnumMember(record, "Origin", "GangMember");
+            string location = GetMember(record, "KillLocation") as string;
+            if (!string.IsNullOrEmpty(location)) changed |= SetMember(record, "KillLocation", string.Empty);
+            object killedAt = GetMember(record, "KilledPlayerAt");
+            if (killedAt is DateTime timestamp && timestamp != DateTime.MinValue)
+                changed |= SetMember(record, "KilledPlayerAt", DateTime.MinValue);
+            if (GetMember(record, "KilledByPlayer") is bool killedByPlayer && killedByPlayer)
+                changed |= SetMember(record, "KilledByPlayer", false);
+            return changed;
         }
 
         private static bool ApplyMaximumRecruitFriendship(object record)
@@ -2071,6 +2078,7 @@ namespace EnRAGECompanionsExtension
                 // Do not deduplicate by ID: older saves/session caches can hold separate record
                 // objects with the same ID, and every live object must have its hate reset.
                 changed |= ApplyMaximumRecruitFriendship(record);
+                changed |= NormalizeExtensionRecruitHistory(record);
             }
             IList comps = GetField(instance, "_comps") as IList;
             if (comps != null)
@@ -2081,6 +2089,7 @@ namespace EnRAGECompanionsExtension
                     if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) continue;
                     object record = GetField(companion, "Rec");
                     changed |= ApplyMaximumRecruitFriendship(record);
+                    changed |= NormalizeExtensionRecruitHistory(record);
                 }
             }
             if (changed)
