@@ -282,13 +282,12 @@ namespace EnRAGECompanionsExtension
                     if (drawRoster != null)
                         _harmony.Patch(drawRoster, prefix: Hook(nameof(RosterMenuDrawPrefix)), postfix: Hook(nameof(RosterMenuDrawPostfix)));
                     Type uiDraw = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "UiDraw");
-                    MethodInfo affinityText = FindMethod(uiDraw, "TextFont", 10, p =>
-                        p[0].ParameterType == typeof(string) && p[2].ParameterType == typeof(float) &&
-                        p[3].ParameterType == typeof(float) && p[4].ParameterType == typeof(float) &&
-                        p.Skip(5).Take(4).All(x => x.ParameterType == typeof(int)) &&
-                        p[9].ParameterType == typeof(bool));
-                    if (affinityText != null)
-                        _harmony.Patch(affinityText, postfix: Hook(nameof(AffinityTextPostfix)));
+                    Type themeType = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "Theme");
+                    MethodInfo affinitySection = FindMethod(themeType, "Section", 5, p =>
+                        p[0].ParameterType == typeof(string) && p[1].ParameterType == typeof(float) &&
+                        p[2].ParameterType == typeof(float) && p[3].ParameterType == typeof(float));
+                    if (affinitySection != null)
+                        _harmony.Patch(affinitySection, postfix: Hook(nameof(AffinitySectionPostfix)));
                 }
                 _harmony.Patch(ask, prefix: Hook(nameof(AskPrefix)));
                 // enRAGE's social prompt uses the same context control and target group. When a
@@ -747,11 +746,11 @@ namespace EnRAGECompanionsExtension
             _activeAffinityDetailRecord = null;
         }
 
-        private static void AffinityTextPostfix(object[] __args)
+        private static void AffinitySectionPostfix(object[] __args)
         {
             try
             {
-                if (!_enableAffinity || __args == null || __args.Length < 10 ||
+                if (!_enableAffinity || __args == null || __args.Length < 4 ||
                     !string.Equals(__args[0] as string, "SENTIMIENTOS", StringComparison.OrdinalIgnoreCase))
                     return;
 
@@ -776,8 +775,8 @@ namespace EnRAGECompanionsExtension
                 if (_uiDrawRect == null || _uiDrawText == null) return;
 
                 int affinity = Math.Max(0, Math.Min(100, state.Affinity));
-                float headerX = Convert.ToSingle(__args[2], CultureInfo.InvariantCulture);
-                float headerY = Convert.ToSingle(__args[3], CultureInfo.InvariantCulture);
+                float headerX = Convert.ToSingle(__args[1], CultureInfo.InvariantCulture);
+                float headerY = Convert.ToSingle(__args[2], CultureInfo.InvariantCulture);
                 // Keep the label and meter on the same header row as SENTIMIENTOS, using the
                 // actual draw coordinates rather than fixed screen coordinates that can overlap history.
                 float x = headerX + 0.155f;
