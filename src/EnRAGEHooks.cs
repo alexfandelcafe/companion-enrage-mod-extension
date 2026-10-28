@@ -638,6 +638,250 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex) { Log("Companion state save warning: " + Unwrap(ex)); }
         }
 
+        private static object FindActiveExtensionCompanion(object instance, string recordId)
+        {
+            if (instance == null || string.IsNullOrWhiteSpace(recordId)) return null;
+            IList companions = GetField(instance, "_comps") as IList;
+            if (companions == null) return null;
+
+            foreach (object companion in companions)
+            {
+                string key = GetField(companion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                    continue;
+                object record = GetField(companion, "Rec");
+                string currentId = GetMember(record, "Id") as string;
+                if (string.Equals(currentId, recordId, StringComparison.OrdinalIgnoreCase))
+                    return companion;
+                string stableKey = KeyPrefix + "roster_" + recordId;
+                if (string.Equals(key, stableKey, StringComparison.OrdinalIgnoreCase))
+                    return companion;
+            }
+            return null;
+        }
+
+        private static void SetPersistentFollowState(object record, CompanionFollowState followState, Ped anchorPed)
+        {
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) return;
+
+            state.FollowState = followState;
+            if (followState == CompanionFollowState.Waiting || followState == CompanionFollowState.Resting)
+            {
+                Ped anchor = anchorPed;
+                if (anchor == null || !anchor.Exists())
+                    anchor = Game.Player.Character;
+                if (anchor != null && anchor.Exists())
+                {
+                    var position = anchor.Position;
+                    state.SavedPosition.HasValue = true;
+                    state.SavedPosition.X = position.X;
+                    state.SavedPosition.Y = position.Y;
+                    state.SavedPosition.Z = position.Z;
+                    try { state.SavedPosition.Heading = anchor.Heading; } catch { state.SavedPosition.Heading = 0f; }
+                }
+                if (followState == CompanionFollowState.Resting)
+                    state.RestStartedUtcTicks = DateTime.UtcNow.Ticks;
+                else
+                    state.RestStartedUtcTicks = 0;
+            }
+            else
+            {
+                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
+                state.RestStartedUtcTicks = 0;
+            }
+            SavePersistentState(state);
+        }
+
+        private static void SetIndividualCompanionOrder(object instance, object record, CompanionFollowState order)
+        {
+            if (instance == null || record == null || !_enableIndividualOrders) return;
+            if (order == CompanionFollowState.Waiting && !_enableWaitMode)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "El modo de espera está desactivado en el archivo INI.");
+                return;
+            }
+
+            string id = GetMember(record, "Id") as string;
+            object companion = FindActiveExtensionCompanion(instance, id);
+            if (companion == null)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "Primero debes llamar a este compañero desde el roster.");
+                return;
+            }
+
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo localizar al compañero para aplicar la orden.");
+                return;
+            }
+
+            SetPersistentFollowState(record, order, ped);
+            LastIndividualOrderTaskAt.Remove(id ?? string.Empty);
+            if (order == CompanionFollowState.Following)
+            {
+                try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
+                SetField(companion, "State", 0);
+                SetField(companion, "AskedAt", Game.GameTime);
+                InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") + " vuelve a seguirte.");
+            }
+            else
+            {
+                try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
+                if (ped.IsOnMount)
+                {
+                    try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
+                }
+                SetField(companion, "State", 0);
+                InvokeInstance(instance, "ShowSubtitle", order == CompanionFollowState.Waiting
+                    ? (GetMember(record, "Name") as string ?? "Tu compañero") + " esperará aquí."
+                    : (GetMember(record, "Name") as string ?? "Tu compañero") + " descansará durante " + _restDurationSeconds + " segundos.");
+            }
+        }
+
+        private static bool MaintainIndividualCompanionOrder(object instance, object companion, Ped player)
+        {
+            if (!_enableIndividualOrders || companion == null) return false;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                return false;
+
+            object record = GetField(companion, "Rec");
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            CompanionPersistentState state = GetPersistentState(record, false);
+            if (state == null) return false;
+
+            if (state.FollowState == CompanionFollowState.Waiting && !_enableWaitMode)
+            {
+                state.FollowState = CompanionFollowState.Following;
+                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
+                SavePersistentState(state);
+                return false;
+            }
+
+            if (state.FollowState != CompanionFollowState.Waiting && state.FollowState != CompanionFollowState.Resting)
+                return false;
+
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead)
+                return true; // Do not let enRAGE's stock task run over a persisted hold/rest order.
+
+            if (state.FollowState == CompanionFollowState.Resting)
+            {
+                if (state.RestStartedUtcTicks <= 0)
+                {
+                    state.RestStartedUtcTicks = DateTime.UtcNow.Ticks;
+                    SavePersistentState(state);
+                }
+                double elapsed = (DateTime.UtcNow.Ticks - state.RestStartedUtcTicks) / (double)TimeSpan.TicksPerSecond;
+                if (elapsed >= _restDurationSeconds)
+                {
+                    state.FollowState = CompanionFollowState.Following;
+                    state.RestStartedUtcTicks = 0;
+                    if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
+                    if (state.Injury != null)
+                    {
+                        state.Injury.IsInjured = false;
+                        state.Injury.Severity = 0;
+                        state.Injury.RecoverySecondsRemaining = 0;
+                        state.Injury.FirstInjuredUtcTicks = 0;
+                    }
+                    SavePersistentState(state);
+                    HealPedToMaximum(ped);
+                    LastIndividualOrderTaskAt.Remove(id);
+                    SetField(companion, "State", 0);
+                    SetField(companion, "AskedAt", Game.GameTime);
+                    try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
+                    InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") + " terminó de descansar y vuelve a seguirte.");
+                    return false;
+                }
+            }
+
+            MaintainAnchoredCompanionTask(id, ped, state);
+            return true;
+        }
+
+        private static void MaintainAnchoredCompanionTask(string id, Ped ped, CompanionPersistentState state)
+        {
+            if (ped == null || !ped.Exists() || state == null) return;
+            if (state.SavedPosition == null) state.SavedPosition = new CompanionSavedPosition();
+            if (!state.SavedPosition.HasValue)
+            {
+                var position = ped.Position;
+                state.SavedPosition.HasValue = true;
+                state.SavedPosition.X = position.X;
+                state.SavedPosition.Y = position.Y;
+                state.SavedPosition.Z = position.Z;
+                try { state.SavedPosition.Heading = ped.Heading; } catch { state.SavedPosition.Heading = 0f; }
+                SavePersistentState(state);
+            }
+
+            int now = Game.GameTime;
+            int last;
+            if (LastIndividualOrderTaskAt.TryGetValue(id, out last) && now >= last && now - last < 1400)
+                return;
+            LastIndividualOrderTaskAt[id] = now;
+
+            if (ped.IsOnMount)
+            {
+                try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
+                return;
+            }
+
+            float dx = ped.Position.X - state.SavedPosition.X;
+            float dy = ped.Position.Y - state.SavedPosition.Y;
+            float dz = ped.Position.Z - state.SavedPosition.Z;
+            float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (distance > _waitRadius)
+            {
+                if (!TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD", new object[] {
+                    ped.Handle, state.SavedPosition.X, state.SavedPosition.Y, state.SavedPosition.Z,
+                    1.0f, 10000, state.SavedPosition.Heading, 1.0f }))
+                    Log("The TASK_GO_STRAIGHT_TO_COORD wrapper was unavailable; held companion " + id + " could not return to its saved position.");
+            }
+            else
+            {
+                if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
+                    TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
+            }
+        }
+
+        private static bool TryInvokeTaskNative(string methodName, object[] args)
+        {
+            try
+            {
+                MethodInfo method = typeof(TASK).GetMethods(StaticFlags).FirstOrDefault(candidate =>
+                    string.Equals(candidate.Name, methodName, StringComparison.OrdinalIgnoreCase) &&
+                    candidate.GetParameters().Length == args.Length);
+                if (method == null) return false;
+
+                ParameterInfo[] parameters = method.GetParameters();
+                object[] converted = new object[args.Length];
+                for (int i = 0; i < args.Length; i++)
+                {
+                    object value = args[i];
+                    Type targetType = parameters[i].ParameterType;
+                    if (value == null || targetType.IsInstanceOfType(value))
+                        converted[i] = value;
+                    else if (targetType.IsEnum)
+                        converted[i] = Enum.ToObject(targetType, value);
+                    else
+                        converted[i] = Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
+                }
+                method.Invoke(null, converted);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("Task invocation failed for " + methodName + ": " + Unwrap(ex));
+                return false;
+            }
+        }
+
         private static int ChangeAffinity(object record, int delta)
         {
             if (!_enableAffinity) return -1;
