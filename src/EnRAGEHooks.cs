@@ -67,6 +67,7 @@ namespace EnRAGECompanionsExtension
         private static int _individualOrderPromptGroup;
         private static bool _individualOrderPromptArmed;
         private static Ped _individualOrderPromptPed;
+        private static string _individualOrderPromptLabel;
         private static int _individualRestPrompt;
         private static int _individualRestPromptFor;
         private static int _individualRestPromptGroup;
@@ -2335,7 +2336,8 @@ namespace EnRAGECompanionsExtension
             bool armed = primary ? _individualOrderPromptArmed : _individualRestPromptArmed;
             Ped promptPed = primary ? _individualOrderPromptPed : _individualRestPromptPed;
 
-            if (prompt == 0 || promptFor != target.Handle || promptGroup != group || !IsPromptValid(prompt))
+            if (prompt == 0 || promptFor != target.Handle || promptGroup != group || !IsPromptValid(prompt) ||
+                (primary && !string.Equals(_individualOrderPromptLabel, label, StringComparison.Ordinal)))
             {
                 if (primary) HideIndividualOrderPrompt(true); else HideIndividualOrderPrompt(false);
                 object controlArg = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, control);
@@ -2343,6 +2345,7 @@ namespace EnRAGECompanionsExtension
                 promptFor = target.Handle;
                 promptGroup = group;
                 armed = false;
+                if (primary) _individualOrderPromptLabel = label;
             }
             promptPed = target;
             if (prompt != 0)
@@ -2390,6 +2393,7 @@ namespace EnRAGECompanionsExtension
             if (prompt != 0 && IsPromptValid(prompt))
                 try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
             SaveIndividualOrderPromptState(primary, 0, 0, 0, false, null);
+            if (primary) _individualOrderPromptLabel = null;
         }
 
         private static void HideIndividualOrderPrompts()
