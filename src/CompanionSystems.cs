@@ -23,6 +23,9 @@ namespace EnRAGECompanionsExtension
         private static readonly Dictionary<string, int> DamageWindowTotal = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastTravelTick = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> TravelAccumulatorMs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, float> TravelDistanceMeters = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, RDR2.Math.Vector3> LastTravelPlayerPosition =
+            new Dictionary<string, RDR2.Math.Vector3>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastAnchorTaskAt = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastStandStillPedHandle = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastCombatTarget = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -348,6 +351,8 @@ namespace EnRAGECompanionsExtension
                 LastRecordTick[id] = now;
                 LastTravelTick[id] = now;
                 TravelAccumulatorMs[id] = 0;
+                TravelDistanceMeters[id] = 0f;
+                LastTravelPlayerPosition.Remove(id);
                 DamageWindowStartedAt.Remove(id);
                 DamageWindowTotal.Remove(id);
                 LastAnchorTaskAt.Remove(id);
@@ -619,6 +624,8 @@ namespace EnRAGECompanionsExtension
             {
                 LastTravelTick[id] = now;
                 TravelAccumulatorMs[id] = 0;
+                TravelDistanceMeters[id] = 0f;
+                LastTravelPlayerPosition[id] = player.Position;
                 return;
             }
 
@@ -626,6 +633,20 @@ namespace EnRAGECompanionsExtension
             LastTravelTick[id] = now;
             if (elapsed < 0 || elapsed > 10000)
                 elapsed = 0;
+
+            RDR2.Math.Vector3 previousPosition;
+            if (LastTravelPlayerPosition.TryGetValue(id, out previousPosition))
+            {
+                float moved = Distance(previousPosition, player.Position);
+                // Discard teleports/streaming jumps instead of rewarding them as travel.
+                if (!float.IsNaN(moved) && !float.IsInfinity(moved) && moved <= 15f)
+                {
+                    float distance;
+                    TravelDistanceMeters.TryGetValue(id, out distance);
+                    TravelDistanceMeters[id] = Math.Min(10000f, distance + moved);
+                }
+            }
+            LastTravelPlayerPosition[id] = player.Position;
 
             bool eligible = Distance(ped.Position, player.Position) <= 25.0f &&
                 !ped.IsDead && !ped.IsInCombat;
@@ -635,12 +656,18 @@ namespace EnRAGECompanionsExtension
             int accumulator;
             TravelAccumulatorMs.TryGetValue(id, out accumulator);
             accumulator = Math.Min(accumulator + elapsed, _settings.AffinityTravelIntervalSeconds * 1000);
-            if (accumulator >= _settings.AffinityTravelIntervalSeconds * 1000)
+            TravelAccumulatorMs[id] = accumulator;
+
+            float traveled;
+            TravelDistanceMeters.TryGetValue(id, out traveled);
+            // Staying still beside the player is not treated as traveling together.
+            if (accumulator >= _settings.AffinityTravelIntervalSeconds * 1000 && traveled >= 50f)
             {
                 accumulator -= _settings.AffinityTravelIntervalSeconds * 1000;
+                TravelDistanceMeters[id] = Math.Max(0f, traveled - 50f);
+                TravelAccumulatorMs[id] = accumulator;
                 AddAffinity(id, _settings.AffinityTravelGain);
             }
-            TravelAccumulatorMs[id] = accumulator;
         }
 
         private static void AddAffinity(string id, int amount)
