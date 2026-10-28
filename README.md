@@ -101,3 +101,19 @@ RecruitRosterId=custom_faction_id
 The example is a placeholder: replace `custom_faction_id` with the exact ID of the faction you want to use. The faction must already be present and loaded in enRAGE; this extension does not create factions or edit enRAGE's faction definitions. Regular/custom factions use ordinary `Roster` records whose `Gang` is the chosen ID; the special `StoryRoster` mirroring remains enabled only when both values are `vdl`. Roster expulsion tests both configured IDs, clears the member's affiliation generically, and persists the exile by record ID. New extension sheets use `extcomp_`; legacy `extvdl_` sheets continue to be recognized. The default relationship group used to keep dismissed recruits friendly to the player is independent of the chosen faction ID.
 
 **Verification status:** source-level change only. No C# compiler, `ScriptHookRDRNetAPI.dll`, or in-game runtime is available in this environment; build and test with the exact API used by the installed RDR2/ScriptHook setup.
+
+
+## Fase 2 — base de estados persistentes
+
+La rama `phase2-persistent-companion-state` añade la base de persistencia versionada para las siguientes fases. No sustituye ni elimina los hooks de reclutamiento existentes.
+
+- `src/CompanionPersistentState.cs`: modelos por ID de registro de enRAGE para seguimiento/espera, preferencia de montura, postura de combate, posición guardada, heridas, afinidad y campos separados de apariencia.
+- `src/CompanionStateStore.cs`: carga y guardado JSON versionado, validación de valores, guardado diferido por cambios, archivo temporal y copia de respaldo, y lectura de outfits antiguos.
+- `src/CompanionStateRuntime.cs`: inicializa el almacén al arrancar el script sin introducir una referencia a `NemesisMod.dll`.
+- `src/EntryPoint.cs`: inicializa el almacén al construir el script.
+
+Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Conserva los datos por el ID persistente del registro, nunca por el handle temporal del ped. El archivo antiguo `scripts/EnRAGECompanionsExtension.outfits.txt` se lee en formato `ID|HASH_HEXADECIMAL`; la migración no lo elimina ni lo reescribe. Los datos antiguos se importan solo cuando el registro nuevo aún no contiene un hash de outfit.
+
+Esta fase establece los modelos y la persistencia, pero todavía no activa las órdenes, heridas, posturas, afinidad ni los cambios de ropa/equipamiento en el juego. Esas funciones se conectarán en las fases siguientes. Los nuevos campos de ropa, sombrero y armas son estructura de datos; no implican que sus natives estén ya implementados.
+
+El esquema actual es la versión 1. Los archivos JSON inválidos se apartan con sufijo `.corrupt-<fecha>` para conservarlos y el almacén intenta recuperar los outfits del archivo antiguo. El guardado se realiza al detectar cambios o migración, no en cada frame.
