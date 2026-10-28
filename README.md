@@ -58,6 +58,14 @@ EnableIndividualOrders=true
 EnableWaitMode=true
 WaitRadius=8.0
 RestDurationSeconds=60
+EnableInjurySystem=true
+InjuryDamageThresholdPercent=10
+InjuryRecoverySeconds=180
+IncapacitatedHealthPercent=35
+MedicineHealingPercent=100
+MedicineRecoveryReductionSeconds=60
+RecruitMedicineCostCents=100
+RestHealsInjuries=true
 ```
 
 - `MaxCompanions`: total active-companion limit, clamped to 1–7. The extension also checks enRAGE's original story-companion recruitment path against this configured cap.
@@ -67,11 +75,19 @@ RestDurationSeconds=60
 - `EnableAffinity`: displays the companion's affinity meter and enables affinity changes.
 - `AffinityTravelIntervalSeconds`: seconds between travel checks (clamped to 30–7200). Travel gain is awarded when the companion remains nearby and the player has moved at least 100 metres during the interval.
 - `AffinityTravelGain`, `AffinityCombatGain`, `AffinityTreatmentGain`: gains for travel, combat (at most once per 30 seconds of an encounter), and a successful paid treatment. Affinity is clamped to 0–100. The detail sheet also exposes explicit `Mejorar afinidad (+10)` and `Reducir afinidad (-10)` actions for controlled testing.
-- `EnableAppearancePersistence` and `PreserveSavedOutfit`: capture and reapply a saved meta-ped outfit hash when RDR2 exposes a non-zero hash. Recalled NPCs in the same session are re-adopted as the same pedestrian whenever the runtime cache still has that entity.
+- `EnableAppearancePersistence` and `PreserveSavedOutfit`: capture/reapply a meta-ped outfit hash if available, standard clothing variation slots, hat/accessory prop slots, and the currently equipped weapon hash. Native wrappers are resolved dynamically. This does not enumerate the full weapon inventory, ammo, or every extra YMT material/albedo/normal variation.
 - `EnableIndividualOrders`: enables contextual order prompts when aiming at an active extension companion. The prompts are separate from `Dejar de seguirme`; the roster detail sheet no longer contains individual orders.
 - `EnableWaitMode`: controls `Quédate aquí`; when enabled the companion returns to the saved anchor if it exceeds `WaitRadius`, then remains there instead of running enRAGE's default follow task.
 - `WaitRadius`: radius in metres around the saved wait/rest position (clamped to 1–50 m; default 8).
-- `RestDurationSeconds`: timed rest before automatic return to follow mode and full-health recovery (clamped to 10–3600 seconds; default 60). The timer and resting state are stored by stable roster ID.
+- `RestDurationSeconds`: timed rest before automatic return to follow mode (clamped to 10–3600 seconds; default 60). A ground-sitting scenario is attempted once; if the installed API lacks the wrapper, it falls back to passive waiting. The timer and resting state are stored by stable roster ID.
+- `EnableInjurySystem`: enables limited health-delta detection for active recruited companions; it does not infer injury from every animation or visible wound.
+- `InjuryDamageThresholdPercent`: minimum single observed health loss as a percentage of max health required to register an injury (1–50; default 10).
+- `InjuryRecoverySeconds`: injury recovery countdown in seconds (15–86400; default 180), persisted periodically.
+- `IncapacitatedHealthPercent`: health restored during an attempted incapacitation recovery (10–75; default 35).
+- `MedicineHealingPercent`: percentage of max health added by a paid treatment (1–100; default 100, capped at max health).
+- `MedicineRecoveryReductionSeconds`: recovery time removed by a treatment (0–86400; default 60).
+- `RecruitMedicineCostCents`: treatment price in cents (0–100000; default 100 = $1.00). A short per-record transaction window guards against duplicate prompt activations.
+- `RestHealsInjuries`: when true, completing `Descansar` clears injury recovery and restores health; when false, it ends the rest without automatic healing.
 - `KeepPlayerSideAfterDismissal`: deprecated. Dismissed extension recruits stay on the player's friendly relationship side regardless of their enRAGE faction.
 
 ## Scope and verification
@@ -88,8 +104,8 @@ This is source code, not a compiled or tested binary. The available environment 
 ## Latest additions: ambient dismissal, medicine, and roster expulsion
 
 - `Dejar de seguirme` now preserves the released pedestrian entity instead of letting enRAGE's `Cleanup` delete a spawned replacement. It clears the companion wrapper and blip, removes the NPC from the player group, and gives the pedestrian a standard wander task. If mounted, it requests a dismount and starts wandering once on foot. The recruit remains associated with the saved roster record for possible later recall.
-- To treat an extension recruit, aim directly at the living NPC in the world and hold the contextual `Dar remedio ($1)` prompt. The prompt is not part of the roster sheet. It deducts exactly 100 cents from the game cash balance and sets that exact targeted ped's current health to `MaxHealth`; it refuses to charge if the ped is no longer valid or is already at full health. Expelled roster IDs are excluded from target discovery and the treatment handler, so an expelled NPC standing nearby cannot receive the medicine.
-- Outfit hashes are now also stored in `EnRAGECompanionsExtension.companions.json` under the stable roster record ID; the legacy `outfits.txt` remains supported. Capture runs before `Adopt` and before dismissal cleanup can touch the entity, and restoration runs before/after enRAGE's setup where appropriate. Same-session recall reuses the original pedestrian when available, preserving its actual clothing even when the outfit-hash native returns zero. For a replacement spawned after a game restart, a zero/unavailable hash still prevents reliable full-outfit restoration; the log records this limitation rather than fabricating a hash.
+- To treat an extension recruit, aim directly at the NPC in the world and hold the contextual `Dar remedio` prompt. Cost, immediate healing percentage, and recovery reduction use the INI settings. The handler revalidates the exact targeted roster ID before charging; confirmed-dead/exiled records and stale targets are rejected, and a short per-record transaction lock guards against duplicate debits. An NPC at full health can still receive treatment if a persisted injury countdown remains.
+- Appearance data is stored by stable roster ID. In addition to the legacy meta-ped outfit hash, the extension tries to capture/restore standard component variations, prop slots (including slot 0, commonly used for hats), and the currently equipped weapon hash. Runtime reflection lets unsupported wrappers fail without crashing the script. Same-session recall reuses the original pedestrian when available. Standard component slots are not the full YMT data model (custom parts, materials, albedo/normal maps and every tint/palette field); weapon inventory and ammunition are not fully enumerated. A missing or zero hash is logged rather than fabricated.
 - Roster members in the Van der Linde story sheet and regular `Roster` records belonging to the configured `RecruitGangId`/`RecruitRosterId` can have `Echar de la banda`, including custom/new non-story records regardless of ID prefix. A member who is currently following the player as an active companion cannot be expelled; dismiss the companion first. A dismissed extension recruit can then be recalled with `Llamarlo` or permanently expelled. The first selection shows a warning that expulsion cannot be undone and may have future consequences; `Confirmar expulsión` commits the change and `Cancelar expulsión` abandons it; leaving the sheet with Back also cancels the pending confirmation. Expulsions are kept in `EnRAGECompanionsExtension.exiled-story-roster.txt` under the active `scripts` directory so the story-roster sync does not automatically add them back. The persistent file is not meant to be edited during ordinary gameplay.
 - The old `EnRAGECompanionsExtension.pending-heals.txt` file may remain from an earlier source revision, but the current contextual prompt does not queue remote cures: it only treats the live NPC currently being aimed at.
 
@@ -144,9 +160,22 @@ La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de su
 
 - `Quédate aquí`: guarda la posición actual del compañero, lo baja del caballo si corresponde y mantiene su IA de espera separada del ciclo `WaitToJoin/Ride`. Si sale del radio configurado, recibe una tarea para regresar al punto guardado.
 - `Sígueme`: elimina el anclaje de espera/descanso, restablece el estado persistente a `Following` y devuelve el control de movimiento al ciclo normal de enRAGE.
-- `Descansar`: mantiene al compañero en la posición guardada durante `RestDurationSeconds`; al finalizar, limpia el estado de lesión persistente, restaura su salud y reanuda el seguimiento.
+- `Descansar`: mantiene al compañero en la posición guardada durante `RestDurationSeconds`, intenta una escena de sentarse en el suelo y luego reanuda el seguimiento. La curación depende de `RestHealsInjuries`.
 - Los prompts de órdenes se mantienen separados de `Dejar de seguirme` y del remedio, y no se agregan botones de órdenes a la ficha. La orden se guarda por ID estable de roster, no por handle del ped; `Llamarlo` vuelve a ponerlo en estado `Following`.
 - Los registros nuevos y antiguos de la extensión se normalizan para que el valor por defecto de `Origin` (`Killed`) no invente el antecedente `te mató` cuando `TimesKilledPlayer` es cero. Los registros con un contador real de muertes no se alteran.
 - La llamada desde la ficha ya no fuerza una tarea de montar al caballo después de `Adopt`; enRAGE conserva el control de sus tareas de aproximación/seguimiento.
 
-Las órdenes y el temporizador quedan implementados a nivel de código fuente, pero requieren validar en RDR2 la firma de los wrappers nativos de movimiento y el comportamiento del compañero montado. Esta revisión tampoco modifica `main` ni fusiona el PR.
+## Fase 4 — heridas, incapacitación y remedios
+
+- Se rastrean pérdidas de salud significativas en compañeros activos y se guarda una gravedad/temporizador por ID estable. La recuperación progresa mientras el compañero está vivo y no incapacitado.
+- La incapacitación persistente es distinta de una muerte confirmada. Si las señales del ped y del daño reciente encajan con una caída, se intenta la vía de reanimación nativa; apuntar al compañero incapacitado muestra `Ayudar a levantarse`. El prompt intenta una tarea de levantarse y conserva la ficha del roster.
+- El remedio usa coste, curación inmediata y reducción de recuperación configurables; excluye muertos confirmados y expulsados y aplica una ventana por registro para reducir los cobros duplicados.
+- Es una aproximación de código fuente al comportamiento de incapacitación de enRAGE, no una reproducción idéntica de su gestor de combate. La combinación de `IsDead`, `IsIncapacitated`, ragdoll y los wrappers de resurrección debe probarse en la versión instalada.
+
+## Fase 5 — posturas y personalización
+
+- El prompt de postura solo aparece al apuntar a un compañero activo si se detecta un enemigo que está atacando al jugador. Las posturas se guardan por roster; `Fuego a mi señal` requiere que el jugador esté disparando o haya disparado dentro de una ventana breve.
+- La personalización intenta guardar/restaurar el hash de outfit, las variaciones estándar de ropa, props como sombreros/accesorios y el arma actualmente equipada. No se limpia el inventario para restaurar un hash.
+- La compatibilidad completa con YMT aún no está implementada. `Sir Joseph's Ultimate YMT Helper` es una herramienta `.asi` con funciones de edición y persistencia más amplias; no hay una API compartida confirmada para invocarla desde este script. Integrarla requiere confirmar un formato/API de intercambio o implementar un lector/aplicador YMT propio. Las variaciones estándar por componente no equivalen a todas las piezas/materiales YMT.
+
+Las órdenes, las heridas, la recuperación por descanso, los prompts y la personalización siguen siendo cambios de código fuente, sin validación dentro de RDR2. Esta revisión tampoco modifica `main` ni fusiona el PR.
