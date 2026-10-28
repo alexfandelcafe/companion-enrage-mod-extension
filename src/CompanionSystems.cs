@@ -289,10 +289,11 @@ namespace EnRAGECompanionsExtension
             if (!_settings.EnableIndividualOrders) return false;
             CompanionPersistentState state = GetState(id);
             if (state == null) return false;
-            return state.Order == CompanionOrder.Waiting ||
-                state.Order == CompanionOrder.ReturningToAnchor ||
-                state.Stance == CompanionCombatStance.HoldPosition ||
-                state.Stance == CompanionCombatStance.ProtectArea;
+            bool waitOrder = _settings.EnableWaitMode &&
+                (state.Order == CompanionOrder.Waiting || state.Order == CompanionOrder.ReturningToAnchor);
+            bool stanceOrder = _settings.EnableCombatStances &&
+                (state.Stance == CompanionCombatStance.HoldPosition || state.Stance == CompanionCombatStance.ProtectArea);
+            return waitOrder || stanceOrder;
         }
 
         internal static void Tick(string id, Ped ped, Ped player, bool isActive)
@@ -336,12 +337,12 @@ namespace EnRAGECompanionsExtension
                 }
             }
 
-            bool waiting = state.Order == CompanionOrder.Waiting ||
-                state.Order == CompanionOrder.DismissedWaiting ||
-                state.Stance == CompanionCombatStance.HoldPosition ||
-                state.Stance == CompanionCombatStance.ProtectArea;
+            bool waiting = (_settings.EnableWaitMode &&
+                (state.Order == CompanionOrder.Waiting || state.Order == CompanionOrder.DismissedWaiting)) ||
+                (_settings.EnableCombatStances &&
+                (state.Stance == CompanionCombatStance.HoldPosition || state.Stance == CompanionCombatStance.ProtectArea));
 
-            if (isActive && state.Order == CompanionOrder.ReturningToAnchor)
+            if (_settings.EnableWaitMode && isActive && state.Order == CompanionOrder.ReturningToAnchor)
                 MaintainAnchor(id, state, ped, now, true);
             else if (waiting && (isActive || state.Order == CompanionOrder.DismissedWaiting))
                 MaintainAnchor(id, state, ped, now, false);
