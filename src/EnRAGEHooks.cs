@@ -3819,11 +3819,33 @@ namespace EnRAGECompanionsExtension
                 try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
                 try { ped.RelationshipGroup = EnsurePersistentRecruitRelationshipGroup(player); } catch { }
                 ApplyAmbientReleasedCombatProfile(ped);
-                AmbientReleasedRecruitPeds.Remove(ped.Handle);
-                AmbientReleasedWanderAt.Remove(ped.Handle);
                 CustomCompanionCombatTargets.Remove(ped.Handle);
                 CustomCombatSuppressedAt.Remove(ped.Handle);
-                CompanionSystems.OnDismissed(rosterRecordId, ped);
+                if (CompanionSystems.Settings.EnableWaitMode)
+                {
+                    AmbientReleasedRecruitPeds.Remove(ped.Handle);
+                    AmbientReleasedWanderAt.Remove(ped.Handle);
+                    CompanionSystems.OnDismissed(rosterRecordId, ped);
+                }
+                else
+                {
+                    // Keep the pre-extension ambient-wander behavior when waiting is disabled in the INI.
+                    AmbientReleasedRecruitPeds.Add(ped.Handle);
+                    try
+                    {
+                        if (ped.IsOnMount)
+                        {
+                            TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0);
+                            AmbientReleasedWanderAt[ped.Handle] = Game.GameTime + 1800;
+                        }
+                        else
+                        {
+                            TASK.TASK_WANDER_STANDARD(ped.Handle, 10f, 10);
+                            AmbientReleasedWanderAt.Remove(ped.Handle);
+                        }
+                    }
+                    catch (Exception ex) { Log("Ambient release task warning: " + Unwrap(ex)); }
+                }
             }
 
             IList comps = GetField(instance, "_comps") as IList;
