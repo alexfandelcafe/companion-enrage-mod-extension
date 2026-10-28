@@ -11,3 +11,12 @@ RecruitRosterId=vdl
 AllowFriendlyFire=true
 ; Force the grey/disabled target dot even when friendly fire is enabled.
 PreventTargeting=false
+; Keep the affinity meter in each recruited NPC's detail sheet.
+EnableAffinity=true
+AffinityTravelIntervalSeconds=300
+AffinityTravelGain=1
+AffinityCombatGain=2
+AffinityTreatmentGain=3
+; Capture and reapply the current RDR2 meta-ped outfit hash when available.
+EnableAppearancePersistence=true
+PreserveSavedOutfit=true
