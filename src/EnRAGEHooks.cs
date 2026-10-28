@@ -2657,10 +2657,11 @@ namespace EnRAGECompanionsExtension
             if (kills != 0) return false;
 
             bool changed = false;
-            object origin = GetMember(record, "Origin");
-            if (!string.Equals(origin == null ? string.Empty : origin.ToString(), "GangMember", StringComparison.OrdinalIgnoreCase))
-                changed |= SetEnumMember(record, "Origin", "Greeted");
-                changed |= SetMember(record, "CanHunt", false);
+            // Extension recruits with no recorded player kills must not inherit enRAGE's
+            // GangMember hunting intent. Keep genuine kill history intact (checked above), but
+            // normalize the extension-owned record's origin as well as disabling its hunt flag.
+            changed |= SetEnumMember(record, "Origin", "Greeted");
+            changed |= SetMember(record, "CanHunt", false);
             string location = GetMember(record, "KillLocation") as string;
             if (!string.IsNullOrEmpty(location)) changed |= SetMember(record, "KillLocation", string.Empty);
             object killedAt = GetMember(record, "KilledPlayerAt");
