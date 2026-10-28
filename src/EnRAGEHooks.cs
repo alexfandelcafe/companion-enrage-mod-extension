@@ -58,6 +58,26 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
+
+        private sealed class CompanionOrderPromptSlot
+        {
+            internal int Handle;
+            internal int TargetHandle;
+            internal int Group;
+            internal int Control;
+            internal string Label;
+            internal bool Armed;
+            internal Ped TargetPed;
+            internal string RecordId;
+        }
+
+        private static readonly Dictionary<string, CompanionOrderPromptSlot> CompanionOrderPrompts =
+            new Dictionary<string, CompanionOrderPromptSlot>(StringComparer.Ordinal);
+        private const int CompanionFollowOrderControl = 1980406895; // INPUT_INTERACT_OPTION1
+        private const int CompanionMountOrderControl = unchecked((int)0x84543902U); // INPUT_INTERACT_OPTION2
+        private const int CompanionStanceOrderControl = unchecked((int)0xF8982F00U); // INPUT_INTERACT_LOCKON
+        private const int CompanionPositionOrderControl = unchecked((int)0x26A18F47U); // INPUT_INTERACT_LOCKON_NEG
+
         private static int _maxCompanions = 3;
         // Default affiliation is Van der Linde for compatibility. Both settings can target an
         // existing faction in enRAGE; the player-friendly relationship group is independent of it.
@@ -1945,6 +1965,361 @@ namespace EnRAGECompanionsExtension
             int cents = CompanionSystems.TreatmentCostCents;
             if (cents == 100) return "Dar remedio ($1)";
             return "Dar remedio ($" + (cents / 100.0).ToString("0.##", CultureInfo.InvariantCulture) + ")";
+        }
+
+        private static void UpdateCompanionOrdersPrompt(object instance, Ped player)
+        {
+            try
+            {
+                if (!CompanionSystems.Settings.EnableIndividualOrders || player == null || !player.Exists())
+                {
+                    HideCompanionOrderPrompts();
+                    return;
+                }
+
+                Ped target = FindAimedRecruitedPed(instance, player);
+                CachedRosterRecord cached;
+                if (target == null || !target.Exists() ||
+                    !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) ||
+                    cached == null || cached.Record == null ||
+                    !IsRecruitedRosterRecord(cached.Record) || IsExiledRosterRecord(cached.Record))
+                {
+                    HideCompanionOrderPrompts();
+                    return;
+                }
+
+                string id = GetMember(cached.Record, "Id") as string;
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    HideCompanionOrderPrompts();
+                    return;
+                }
+
+                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
+                bool active = IsExtensionCompanionActiveForPed(instance, target.Handle);
+                if (!active)
+                {
+                    HideCompanionOrderPrompt("follow");
+                    HideCompanionOrderPrompt("mount");
+                    HideCompanionOrderPrompt("stance");
+                    HideCompanionOrderPrompt("position");
+                    if (UpdateCompanionOrderPromptSlot("follow", target, id, group,
+                        CompanionFollowOrderControl, "Llamarlo", out bool completed))
+                    {
+                        // The prompt is bound to this exact persistent roster record and entity.
+                        CallRecruitedRosterMember(instance, null, cached.Record);
+                        HideCompanionOrderPrompts();
+                    }
+                    return;
+                }
+
+                CompanionPersistentState state = CompanionSystems.GetState(id);
+                if (state == null)
+                {
+                    HideCompanionOrderPrompts();
+                    return;
+                }
+
+                bool held = state.Order == CompanionOrder.Waiting ||
+                    state.Order == CompanionOrder.ReturningToAnchor ||
+                    state.Stance == CompanionCombatStance.HoldPosition ||
+                    state.Stance == CompanionCombatStance.ProtectArea;
+
+                if (UpdateCompanionOrderPromptSlot("follow", target, id, group, CompanionFollowOrderControl,
+                    held ? "Seguirme" : "Esperar aquí", out bool followCompleted) && followCompleted)
+                {
+                    CompanionSystems.ToggleWaitFollow(id, target);
+                    InvokeInstance(instance, "ShowSubtitle", held ? "El compañero vuelve a seguirte." : "El compañero esperará aquí.");
+                    HideCompanionOrderPrompts();
+                    return;
+                }
+
+                string mountLabel = MountOrderPromptLabel(instance, id, target);
+                if (UpdateCompanionOrderPromptSlot("mount", target, id, group, CompanionMountOrderControl,
+                    mountLabel, out bool mountCompleted) && mountCompleted)
+                {
+                    ExecuteMountOrder(instance, id, target);
+                    HideCompanionOrderPrompts();
+                    return;
+                }
+
+                string stanceLabel = CompanionSystems.Settings.EnableCombatStances
+                    ? "Postura: " + CompanionSystems.StanceLabel(state.Stance)
+                    : null;
+                if (UpdateCompanionOrderPromptSlot("stance", target, id, group, CompanionStanceOrderControl,
+                    stanceLabel, out bool stanceCompleted) && stanceCompleted)
+                {
+                    CompanionSystems.CycleStance(id, target);
+                    InvokeInstance(instance, "ShowSubtitle", "Postura de combate: " +
+                        CompanionSystems.StanceLabel(CompanionSystems.GetStance(id)) + ".");
+                    HideCompanionOrderPrompts();
+                    return;
+                }
+
+                string positionLabel = PositionOrderPromptLabel(id, target);
+                if (UpdateCompanionOrderPromptSlot("position", target, id, group, CompanionPositionOrderControl,
+                    positionLabel, out bool positionCompleted) && positionCompleted)
+                {
+                    CompanionPersistentState positionState = CompanionSystems.GetState(id);
+                    float distance = positionState != null && positionState.HasAnchor
+                        ? Distance3(target.Position.X, target.Position.Y, target.Position.Z,
+                            positionState.AnchorX, positionState.AnchorY, positionState.AnchorZ)
+                        : 0f;
+                    if (positionState != null && positionState.HasAnchor &&
+                        distance > CompanionSystems.Settings.WaitRadius)
+                    {
+                        CompanionSystems.ReturnToAnchor(id, target);
+                        InvokeInstance(instance, "ShowSubtitle", "El compañero regresa a la posición guardada.");
+                    }
+                    else
+                    {
+                        CompanionSystems.SaveAnchor(id, target);
+                        InvokeInstance(instance, "ShowSubtitle", "Posición del compañero guardada.");
+                    }
+                    HideCompanionOrderPrompts();
+                }
+            }
+            catch (Exception ex)
+            {
+                HideCompanionOrderPrompts();
+                Log("Individual companion order prompt failed safely: " + Unwrap(ex));
+            }
+        }
+
+        private static string PositionOrderPromptLabel(string id, Ped target)
+        {
+            CompanionPersistentState state = CompanionSystems.GetState(id);
+            if (state == null || !state.HasAnchor)
+                return "Guardar posición";
+            float distance = Distance3(target.Position.X, target.Position.Y, target.Position.Z,
+                state.AnchorX, state.AnchorY, state.AnchorZ);
+            return distance > CompanionSystems.Settings.WaitRadius ? "Regresar a posición" : "Actualizar posición";
+        }
+
+        private static string MountOrderPromptLabel(object instance, string id, Ped target)
+        {
+            if (target == null || !target.Exists() || target.IsDead)
+                return null;
+            if (target.IsOnMount)
+                return CompanionSystems.GetMountPolicy(id) == CompanionMountPolicy.StayMounted
+                    ? "Desmontar" : "Quedarse montado";
+
+            Ped horse = FindCompanionHorse(instance, target);
+            if (horse == null || !horse.Exists() || horse.IsDead ||
+                Distance3(target.Position.X, target.Position.Y, target.Position.Z,
+                    horse.Position.X, horse.Position.Y, horse.Position.Z) > 25f)
+                return null;
+            return "Volver a montar";
+        }
+
+        private static void ExecuteMountOrder(object instance, string id, Ped target)
+        {
+            if (target == null || !target.Exists() || target.IsDead)
+                return;
+
+            if (target.IsOnMount)
+            {
+                if (CompanionSystems.GetMountPolicy(id) != CompanionMountPolicy.StayMounted)
+                {
+                    CompanionSystems.SetWaitHere(id, target);
+                    CompanionSystems.SetMountPolicy(id, CompanionMountPolicy.StayMounted);
+                    InvokeInstance(instance, "ShowSubtitle", "El compañero esperará montado.");
+                }
+                else
+                {
+                    CompanionSystems.SetMountPolicy(id, CompanionMountPolicy.Normal);
+                    try { TASK.TASK_DISMOUNT_ANIMAL(target.Handle, 0, 0UL, 0UL, 0UL, 0); }
+                    catch (Exception ex) { Log("Manual companion dismount failed: " + Unwrap(ex)); }
+                    InvokeInstance(instance, "ShowSubtitle", "El compañero ha recibido la orden de desmontar.");
+                }
+                return;
+            }
+
+            Ped horse = FindCompanionHorse(instance, target);
+            if (horse == null || !horse.Exists() || horse.IsDead ||
+                Distance3(target.Position.X, target.Position.Y, target.Position.Z,
+                    horse.Position.X, horse.Position.Y, horse.Position.Z) > 25f)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "No hay una montura válida y accesible para este compañero.");
+                return;
+            }
+
+            bool riderQueryAvailable;
+            int riderHandle = GetRiderOfMountHandle(horse, out riderQueryAvailable);
+            if (!riderQueryAvailable)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo comprobar si la montura está ocupada; no se intentó montar.");
+                return;
+            }
+            if (riderHandle != 0 && riderHandle != target.Handle)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "La montura está ocupada por otra entidad.");
+                return;
+            }
+
+            try
+            {
+                TASK.TASK_MOUNT_ANIMAL(target.Handle, horse.Handle, 20000, -1, 2f, 1, 0UL, 0UL);
+                if (CompanionSystems.GetOrder(id) == CompanionOrder.Waiting)
+                    CompanionSystems.SetMountPolicy(id, CompanionMountPolicy.StayMounted);
+                else
+                    CompanionSystems.SetMountPolicy(id, CompanionMountPolicy.Normal);
+            }
+            catch (Exception ex)
+            {
+                Log("Manual companion mount failed: " + Unwrap(ex));
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo completar la orden de montar.");
+            }
+        }
+
+        private static Ped FindCompanionHorse(object instance, Ped target)
+        {
+            IList companions = GetField(instance, "_comps") as IList;
+            if (companions == null || target == null || !target.Exists())
+                return null;
+
+            foreach (object companion in companions)
+            {
+                Ped companionPed = GetField(companion, "Ped") as Ped;
+                if (companionPed == null || !companionPed.Exists())
+                    companionPed = GetField(companion, "Real") as Ped;
+                if (companionPed == null || !companionPed.Exists() || companionPed.Handle != target.Handle)
+                    continue;
+
+                Ped horse = GetField(companion, "Horse") as Ped;
+                return horse != null && horse.Exists() && !horse.IsDead ? horse : null;
+            }
+            return null;
+        }
+
+        private static int GetRiderOfMountHandle(Ped horse, out bool available)
+        {
+            available = false;
+            if (horse == null || !horse.Exists() || horse.IsDead)
+                return 0;
+
+            try
+            {
+                Type nativeType = typeof(Ped).Assembly.GetType("RDR2.Native.PED", false);
+                if (nativeType == null) return 0;
+                MethodInfo method = nativeType.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(m =>
+                        (m.Name.Equals("_GET_RIDER_OF_MOUNT", StringComparison.OrdinalIgnoreCase) ||
+                         m.Name.Equals("GET_RIDER_OF_MOUNT", StringComparison.OrdinalIgnoreCase)) &&
+                        m.GetParameters().Length == 2 &&
+                        m.GetParameters()[0].ParameterType == typeof(int) &&
+                        m.GetParameters()[1].ParameterType == typeof(bool));
+                if (method == null) return 0;
+
+                object result = method.Invoke(null, new object[] { horse.Handle, false });
+                available = true;
+                if (result == null) return 0;
+                if (result is int handle) return handle;
+                if (result is Ped rider && rider.Exists()) return rider.Handle;
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log("Mount occupancy check failed: " + Unwrap(ex));
+                return 0;
+            }
+        }
+
+        private static bool UpdateCompanionOrderPromptSlot(string key, Ped target, string id, int group,
+            int control, string label, out bool completed)
+        {
+            completed = false;
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                HideCompanionOrderPrompt(key);
+                return false;
+            }
+
+            CompanionOrderPromptSlot slot;
+            if (!CompanionOrderPrompts.TryGetValue(key, out slot))
+            {
+                slot = new CompanionOrderPromptSlot();
+                CompanionOrderPrompts[key] = slot;
+            }
+
+            bool changed = slot.Handle == 0 || slot.TargetHandle != target.Handle ||
+                slot.Group != group || slot.Control != control ||
+                !string.Equals(slot.Label, label, StringComparison.Ordinal) ||
+                !IsPromptValid(slot.Handle);
+            if (changed)
+            {
+                DeleteCompanionOrderPrompt(slot);
+                object controlValue = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, control);
+                object result = _makePrompt.Invoke(null, new object[] { controlValue, label, true, group });
+                slot.Handle = result == null ? 0 : Convert.ToInt32(result);
+                slot.TargetHandle = target.Handle;
+                slot.Group = group;
+                slot.Control = control;
+                slot.Label = label;
+                slot.Armed = false;
+                slot.TargetPed = target;
+                slot.RecordId = id;
+            }
+            else
+            {
+                slot.TargetPed = target;
+                slot.RecordId = id;
+            }
+
+            if (slot.Handle == 0)
+                return false;
+            HUD._UI_PROMPT_SET_VISIBLE(slot.Handle, true);
+            HUD._UI_PROMPT_SET_ENABLED(slot.Handle, true);
+
+            if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(slot.Handle))
+            {
+                slot.Armed = true;
+                return false;
+            }
+            if (!slot.Armed)
+                return false;
+
+            slot.Armed = false;
+            completed = true;
+            return true;
+        }
+
+        private static void HideCompanionOrderPrompt(string key)
+        {
+            CompanionOrderPromptSlot slot;
+            if (CompanionOrderPrompts.TryGetValue(key, out slot))
+                DeleteCompanionOrderPrompt(slot);
+        }
+
+        private static void HideCompanionOrderPrompts()
+        {
+            foreach (CompanionOrderPromptSlot slot in CompanionOrderPrompts.Values)
+                DeleteCompanionOrderPrompt(slot);
+        }
+
+        private static void DeleteCompanionOrderPrompt(CompanionOrderPromptSlot slot)
+        {
+            if (slot == null) return;
+            if (slot.Handle != 0 && IsPromptValid(slot.Handle))
+            {
+                try { HUD._UI_PROMPT_DELETE(slot.Handle); } catch { }
+            }
+            slot.Handle = 0;
+            slot.TargetHandle = 0;
+            slot.Group = 0;
+            slot.Control = 0;
+            slot.Label = null;
+            slot.Armed = false;
+            slot.TargetPed = null;
+            slot.RecordId = null;
+        }
+
+        private static float Distance3(float x1, float y1, float z1, float x2, float y2, float z2)
+        {
+            float dx = x1 - x2;
+            float dy = y1 - y2;
+            float dz = z1 - z2;
+            return (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
         }
 
         private static void HideRecruitMedicinePrompt()
