@@ -5206,8 +5206,17 @@ namespace EnRAGECompanionsExtension
                 if (since == 0 || DateTime.UtcNow.Ticks - since < TimeSpan.FromMinutes(1).Ticks)
                     return true;
             }
-            // enRAGE tracks a recent ragdoll/down event for up to 10 seconds; use the same limited
-            // window for a fatal health drop, but never infer incapacitation from an old corpse.
+
+            // Match enRAGE's own death distinction first. Its LooksKnockedOut(Ped) uses the
+            // ped's incapacitation state, gun-butt knockout and weapon-group cause of death.
+            // A real death (LooksKnockedOut=false) must not become an indefinite roster resurrection.
+            if (ped.IsDead)
+            {
+                try { if (TryStaticBool("LooksKnockedOut", ped)) return true; } catch { }
+            }
+
+            // Fallback for installations where the enRAGE helper cannot be resolved: only a recently
+            // damaged ragdoll is eligible, so an old corpse is never revived by inference.
             if (ped.IsDead && ped.IsRagdoll)
             {
                 int last;
