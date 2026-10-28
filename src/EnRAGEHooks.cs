@@ -1711,9 +1711,12 @@ namespace EnRAGECompanionsExtension
             uint existing;
             if (!overwriteExisting && TryGetSavedRecruitOutfitHash(record, out existing) && existing != 0U)
             {
-                // The full outfit hash may exist while individual variation slots were not captured
-                // by an older build. Capture those standard native component slots additively.
+                // The full outfit hash may exist while standard clothing props or the currently
+                // equipped weapon were not captured by an older build. Capture each native category
+                // independently so missing slots don't block other appearance data.
                 CaptureRecruitClothingComponents(record, ped, false);
+                CaptureRecruitPedProps(record, ped, false);
+                CaptureCurrentWeaponHash(record, ped, false);
                 return;
             }
 
@@ -1739,6 +1742,8 @@ namespace EnRAGECompanionsExtension
                 SavePersistentState(savedState);
             }
             CaptureRecruitClothingComponents(record, ped, overwriteExisting);
+            CaptureRecruitPedProps(record, ped, overwriteExisting);
+            CaptureCurrentWeaponHash(record, ped, overwriteExisting);
             SavePersistentRecruitOutfits();
             Log("Saved meta-ped outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) +
                 " and available component variations for " + (GetMember(record, "Name") as string ?? id) +
@@ -1775,10 +1780,12 @@ namespace EnRAGECompanionsExtension
                 if (hasHash && !TryEquipMetaPedOutfitHash(ped, outfitHash))
                     Log("Could not restore saved meta-ped outfit for record " + id + "; compatible outfit native was unavailable.");
                 bool componentsApplied = ApplySavedRecruitClothingComponents(record, ped);
+                bool propsApplied = ApplySavedRecruitPedProps(record, ped);
+                bool weaponApplied = ApplySavedCurrentWeapon(record, ped);
                 if (hasHash)
                     Log("Restored meta-ped outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
                         (GetMember(record, "Name") as string ?? id) + " (ped=" + ped.Handle + ").");
-                else if (!componentsApplied)
+                else if (!componentsApplied && !propsApplied && !weaponApplied)
                     return;
 
                 // If a hash is present but no slots were saved by an earlier revision, capture the
@@ -1823,6 +1830,215 @@ namespace EnRAGECompanionsExtension
             SavePersistentState(state);
             Log("Saved " + snapshot.Count + " native clothing component variation(s) for " +
                 (GetMember(record, "Name") as string ?? GetMember(record, "Id") as string) + ".");
+        }
+
+        private static void CaptureRecruitPedProps(object record, Ped ped, bool overwriteExisting)
+        {
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists() || ped.IsDead)
+                return;
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) return;
+            if (state.Appearance == null) state.Appearance = new CompanionAppearanceState();
+            if (!overwriteExisting && state.Appearance.PedProps != null && state.Appearance.PedProps.Count > 0)
+                return;
+
+            MethodInfo getDrawable = FindPedNative(new[] { "GET_PED_PROP_INDEX" }, 2,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType));
+            MethodInfo getTexture = FindPedNative(new[] { "GET_PED_PROP_TEXTURE_INDEX" }, 2,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType));
+            if (getDrawable == null || getTexture == null)
+            {
+                Log("Ped prop getter wrappers are unavailable; per-slot hat/accessory persistence is disabled for this API build.");
+                return;
+            }
+
+            List<CompanionPedProp> snapshot = new List<CompanionPedProp>();
+            try
+            {
+                for (int propId = 0; propId < 10; propId++)
+                {
+                    int drawable = ReadPedComponentIndex(getDrawable, ped.Handle, propId);
+                    int texture = ReadPedComponentIndex(getTexture, ped.Handle, propId);
+                    if (drawable < -1 || texture < 0) continue;
+                    snapshot.Add(new CompanionPedProp { PropId = propId, DrawableId = drawable, TextureId = texture });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Ped prop snapshot failed: " + Unwrap(ex));
+                return;
+            }
+
+            if (snapshot.Count == 0) return;
+            state.Appearance.PedProps = snapshot;
+            SavePersistentState(state);
+            Log("Saved " + snapshot.Count + " prop slot(s), including hat/accessory slots, for " +
+                (GetMember(record, "Name") as string ?? GetMember(record, "Id") as string) + ".");
+        }
+
+        private static bool ApplySavedRecruitPedProps(object record, Ped ped)
+        {
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists()) return false;
+            CompanionPersistentState state = GetPersistentState(record, false);
+            List<CompanionPedProp> props = state == null || state.Appearance == null ? null : state.Appearance.PedProps;
+            if (props == null || props.Count == 0) return false;
+
+            MethodInfo setProp = FindPedNative(new[] { "SET_PED_PROP_INDEX" }, 5,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType) &&
+                     IsNativeInteger(p[2].ParameterType) && IsNativeInteger(p[3].ParameterType) &&
+                     p[4].ParameterType == typeof(bool));
+            MethodInfo clearProp3 = FindPedNative(new[] { "CLEAR_PED_PROP" }, 3,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType) &&
+                     p[2].ParameterType == typeof(bool));
+            MethodInfo clearProp2 = FindPedNative(new[] { "CLEAR_PED_PROP" }, 2,
+                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType));
+            int applied = 0;
+            try
+            {
+                foreach (CompanionPedProp prop in props)
+                {
+                    if (prop == null || prop.PropId < 0 || prop.PropId > 9) continue;
+                    if (prop.DrawableId < 0)
+                    {
+                        MethodInfo clear = clearProp3 ?? clearProp2;
+                        if (clear == null) continue;
+                        ParameterInfo[] cp = clear.GetParameters();
+                        object[] args = clearProp3 != null
+                            ? new object[] { ConvertNativeInteger(ped.Handle, cp[0].ParameterType),
+                                ConvertNativeInteger(prop.PropId, cp[1].ParameterType), false }
+                            : new object[] { ConvertNativeInteger(ped.Handle, cp[0].ParameterType),
+                                ConvertNativeInteger(prop.PropId, cp[1].ParameterType) };
+                        clear.Invoke(null, args);
+                        applied++;
+                        continue;
+                    }
+
+                    if (setProp == null) continue;
+                    ParameterInfo[] p = setProp.GetParameters();
+                    setProp.Invoke(null, new object[]
+                    {
+                        ConvertNativeInteger(ped.Handle, p[0].ParameterType),
+                        ConvertNativeInteger(prop.PropId, p[1].ParameterType),
+                        ConvertNativeInteger(prop.DrawableId, p[2].ParameterType),
+                        ConvertNativeInteger(prop.TextureId, p[3].ParameterType),
+                        true
+                    });
+                    applied++;
+                }
+
+                MethodInfo update = FindPedNative(new[] { "_UPDATE_PED_VARIATION", "UPDATE_PED_VARIATION" }, 6,
+                    p => IsNativeInteger(p[0].ParameterType) && p.Skip(1).All(parameter => parameter.ParameterType == typeof(bool)));
+                if (applied > 0 && update != null)
+                {
+                    ParameterInfo[] p = update.GetParameters();
+                    update.Invoke(null, new object[]
+                    {
+                        ConvertNativeInteger(ped.Handle, p[0].ParameterType), false, true, true, true, false
+                    });
+                }
+                if (applied > 0)
+                    Log("Restored " + applied + " prop slot(s), including hats/accessories, for " +
+                        (GetMember(record, "Name") as string ?? GetMember(record, "Id") as string) + ".");
+                return applied > 0;
+            }
+            catch (Exception ex)
+            {
+                Log("Applying saved hat/accessory props failed: " + Unwrap(ex));
+                return applied > 0;
+            }
+        }
+
+        private static bool CaptureCurrentWeaponHash(object record, Ped ped, bool overwriteExisting)
+        {
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists() || ped.IsDead)
+                return false;
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) return false;
+            if (state.Appearance == null) state.Appearance = new CompanionAppearanceState();
+            if (!overwriteExisting && state.Appearance.WeaponHashes != null && state.Appearance.WeaponHashes.Count > 0)
+                return false;
+
+            uint hash;
+            if (!TryGetCurrentPedWeaponHash(ped, out hash) || hash == 0U)
+            {
+                Log("The current-weapon native was unavailable or returned zero; weapon restoration was not recorded.");
+                return false;
+            }
+
+            // Current native wrappers don't expose a reliable full-inventory enumeration in all
+            // ScriptHook builds. Store the equipped weapon separately without claiming to preserve ammo/inventory.
+            state.Appearance.WeaponHashes = new List<uint> { hash };
+            SavePersistentState(state);
+            Log("Saved equipped weapon hash 0x" + hash.ToString("X8", CultureInfo.InvariantCulture) +
+                " for " + (GetMember(record, "Name") as string ?? GetMember(record, "Id") as string) + ".");
+            return true;
+        }
+
+        private static bool TryGetCurrentPedWeaponHash(Ped ped, out uint weaponHash)
+        {
+            weaponHash = 0U;
+            if (ped == null || !ped.Exists()) return false;
+            MethodInfo getter = typeof(WEAPON).GetMethods(StaticFlags).FirstOrDefault(method =>
+            {
+                if (!string.Equals(method.Name, "GET_CURRENT_PED_WEAPON", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                ParameterInfo[] p = method.GetParameters();
+                return p.Length == 5 && IsNativeInteger(p[0].ParameterType) &&
+                    p[1].ParameterType.IsByRef && IsNativeInteger(p[1].ParameterType.GetElementType()) &&
+                    (p[2].ParameterType == typeof(bool) || p[2].ParameterType == typeof(int)) &&
+                    IsNativeInteger(p[3].ParameterType) &&
+                    (p[4].ParameterType == typeof(bool) || p[4].ParameterType == typeof(int));
+            });
+            if (getter == null) return false;
+            try
+            {
+                ParameterInfo[] p = getter.GetParameters();
+                object[] args = new object[]
+                {
+                    ConvertNativeInteger(ped.Handle, p[0].ParameterType),
+                    ConvertNativeInteger(0, p[1].ParameterType.GetElementType()),
+                    ConvertArgument(false, p[2].ParameterType),
+                    ConvertNativeInteger(0, p[3].ParameterType),
+                    ConvertArgument(false, p[4].ParameterType)
+                };
+                object result = getter.Invoke(null, args);
+                if (result is bool valid && !valid) return false;
+                weaponHash = NativeHashToUInt32(args[1]);
+                return weaponHash != 0U;
+            }
+            catch (Exception ex)
+            {
+                Log("Current-weapon native lookup failed: " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        private static object ConvertArgument(object value, Type targetType)
+        {
+            if (targetType.IsEnum) return Enum.ToObject(targetType, value);
+            if (targetType == typeof(bool)) return Convert.ToBoolean(value, CultureInfo.InvariantCulture);
+            return Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
+        }
+
+        private static bool ApplySavedCurrentWeapon(object record, Ped ped)
+        {
+            if (!_enableAppearancePersistence || record == null || ped == null || !ped.Exists() || ped.IsDead)
+                return false;
+            CompanionPersistentState state = GetPersistentState(record, false);
+            List<uint> hashes = state == null || state.Appearance == null ? null : state.Appearance.WeaponHashes;
+            uint hash = hashes == null ? 0U : hashes.FirstOrDefault(value => value != 0U);
+            if (hash == 0U) return false;
+
+            // Restore only the equipped weapon hash. The available wrappers don't guarantee enumeration
+            // of every carried weapon/ammo slot, so don't clear the companion's existing inventory.
+            bool given = TryInvokeNativeWrapper(typeof(WEAPON), "GIVE_DELAYED_WEAPON_TO_PED",
+                new object[] { ped.Handle, hash, 30, true, 0x2CD419DCU });
+            bool selected = TryInvokeNativeWrapper(typeof(WEAPON), "SET_CURRENT_PED_WEAPON",
+                new object[] { ped.Handle, hash, true, 0, false, false });
+            if (given || selected)
+                Log("Restored equipped weapon hash 0x" + hash.ToString("X8", CultureInfo.InvariantCulture) +
+                    " for " + (GetMember(record, "Name") as string ?? GetMember(record, "Id") as string) + ".");
+            return given || selected;
         }
 
         private static bool TryGetPedComponentVariation(Ped ped, int componentId,
