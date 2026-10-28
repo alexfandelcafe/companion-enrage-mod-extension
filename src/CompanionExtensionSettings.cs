@@ -95,19 +95,22 @@ namespace EnRAGECompanionsExtension
                 }
 
                 string[] defaultLines = defaults.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-                bool missing = false;
+                List<string> missingSettings = new List<string>();
                 foreach (string defaultLine in defaultLines)
                 {
                     string candidate = defaultLine.Trim();
                     int split = candidate.IndexOf('=');
                     if (split > 0 && !values.ContainsKey(candidate.Substring(0, split).Trim()))
-                    {
-                        missing = true;
-                        break;
-                    }
+                        missingSettings.Add(candidate);
                 }
-                if (missing)
-                    File.AppendAllText(path, defaults);
+                if (missingSettings.Count > 0)
+                {
+                    // Append only missing keys so that existing user values are not duplicated and
+                    // later shadowed by a default on the next startup.
+                    File.AppendAllText(path, Environment.NewLine +
+                        "; Opciones nuevas añadidas automáticamente por la extensión" + Environment.NewLine +
+                        string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
+                }
 
                 bool b;
                 int i;
