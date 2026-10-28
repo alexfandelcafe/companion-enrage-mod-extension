@@ -1118,7 +1118,8 @@ namespace EnRAGECompanionsExtension
 
         private static void ApplySavedRecruitOutfit(object record, Ped ped)
         {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
+            if (!CompanionSystems.Settings.EnableAppearancePersistence ||
+                record == null || ped == null || !ped.Exists() || ped.IsDead) return;
             string id = GetMember(record, "Id") as string;
             uint outfitHash;
             if (string.IsNullOrWhiteSpace(id))
