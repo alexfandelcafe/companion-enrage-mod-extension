@@ -2778,7 +2778,7 @@ namespace EnRAGECompanionsExtension
         {
             try
             {
-                if (!_enableIndividualOrders || player == null || !player.Exists() || player.IsInCombat)
+                if (!_enableIndividualOrders || player == null || !player.Exists())
                 {
                     HideCombatStancePrompt();
                     return;
@@ -3416,6 +3416,50 @@ namespace EnRAGECompanionsExtension
             int companionHandle = companionPed.Handle;
             int previousTarget;
             bool hadPreviousTarget = CustomCompanionCombatTargets.TryGetValue(companionHandle, out previousTarget);
+            object stanceRecord = GetField(companion, "Rec");
+            string stanceId = GetMember(stanceRecord, "Id") as string;
+            CompanionPersistentState stanceState = GetPersistentState(stanceRecord, false);
+            CompanionCombatStance stance = stanceState == null
+                ? CompanionCombatStance.FollowOrders : stanceState.CombatStance;
+
+            bool playerFiring = false;
+            try { playerFiring = PED.IS_PED_SHOOTING(player.Handle); } catch { }
+            if (playerFiring && !string.IsNullOrWhiteSpace(stanceId))
+                LastPlayerFireAtById[stanceId] = now;
+
+            if (stance == CompanionCombatStance.HoldPosition)
+            {
+                CustomCompanionCombatTargets.Remove(companionHandle);
+                CustomCombatSuppressedAt[companionHandle] = now;
+                if (hadPreviousTarget)
+                    try { TASK.CLEAR_PED_TASKS(companionHandle, true, false); } catch { }
+                try { PED.SET_PED_COMBAT_ATTRIBUTES(companionHandle, 5, false); } catch { }
+                try { PED.SET_PED_COMBAT_ATTRIBUTES(companionHandle, 46, false); } catch { }
+                TryInvokeTaskNative("TASK_STAND_STILL", new object[] { companionHandle, 900 });
+                return;
+            }
+
+            if (stance == CompanionCombatStance.DefendArea && stanceState != null &&
+                stanceState.SavedPosition != null && stanceState.SavedPosition.HasValue && threat != null)
+            {
+                float dx = threat.Position.X - stanceState.SavedPosition.X;
+                float dy = threat.Position.Y - stanceState.SavedPosition.Y;
+                float dz = threat.Position.Z - stanceState.SavedPosition.Z;
+                float radius = Math.Max(10.0f, _waitRadius * 2.0f);
+                if ((float)Math.Sqrt(dx * dx + dy * dy + dz * dz) > radius)
+                    threat = null;
+            }
+
+            if (stance == CompanionCombatStance.FireOnSignal)
+            {
+                int lastPlayerFire;
+                bool recentPlayerFire = playerFiring ||
+                    (!string.IsNullOrWhiteSpace(stanceId) &&
+                     LastPlayerFireAtById.TryGetValue(stanceId, out lastPlayerFire) &&
+                     now >= lastPlayerFire && now - lastPlayerFire <= 2500);
+                if (!recentPlayerFire)
+                    threat = null;
+            }
 
             if (threat == null)
             {
@@ -4786,6 +4830,14 @@ namespace EnRAGECompanionsExtension
             if (state == null || state.Injury == null) return false;
 
             bool wasIncapacitated = state.Injury.IsIncapacitated;
+            bool wasInjured = state.Injury.IsInjured;
+            int oldSeverity = state.Injury.Severity;
+            double oldRecovery = state.Injury.RecoverySecondsRemaining;
+            long oldFirstInjured = state.Injury.FirstInjuredUtcTicks;
+            long oldIncapacitatedSince = state.Injury.IncapacitatedSinceUtcTicks;
+            bool rosterWasAlive = GetMember(record, "IsAlive") is bool currentlyAlive && currentlyAlive;
+            bool rosterWasPresumedDead = GetMember(record, "PresumedDead") is bool presumedDead && presumedDead;
+
             state.Injury.IsIncapacitated = true;
             state.Injury.IsInjured = true;
             state.Injury.Severity = Math.Max(40, state.Injury.Severity);
@@ -4796,6 +4848,11 @@ namespace EnRAGECompanionsExtension
             state.Injury.RecoverySecondsRemaining = Math.Max(state.Injury.RecoverySecondsRemaining, _injuryRecoverySeconds);
             SetMember(record, "IsAlive", true);
             SetMember(record, "PresumedDead", false);
+            bool stateChanged = !wasIncapacitated || !wasInjured || oldSeverity != state.Injury.Severity ||
+                Math.Abs(oldRecovery - state.Injury.RecoverySecondsRemaining) > 0.01 ||
+                oldFirstInjured != state.Injury.FirstInjuredUtcTicks ||
+                oldIncapacitatedSince != state.Injury.IncapacitatedSinceUtcTicks ||
+                !rosterWasAlive || rosterWasPresumedDead;
 
             if (ped.IsDead)
             {
@@ -4817,7 +4874,7 @@ namespace EnRAGECompanionsExtension
                 }
             }
 
-            SavePersistentState(state);
+            if (stateChanged) SavePersistentState(state);
             if (!wasIncapacitated)
                 InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") +
                     " ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse.");
