@@ -1471,7 +1471,8 @@ namespace EnRAGECompanionsExtension
             // The prompt is tied to the exact targeted entity. Do not charge for a stale target,
             // and do not silently heal a different pedestrian that happens to share the same model.
             CachedRosterRecord targetedCache;
-            if (targetedPed == null || !targetedPed.Exists() || targetedPed.IsDead ||
+            if (targetedPed == null || !targetedPed.Exists() ||
+                (targetedPed.IsDead && !IsPedIncapacitatedRecruit(targetedPed)) ||
                 !RosterRecordsByPedHandle.TryGetValue(targetedPed.Handle, out targetedCache) ||
                 targetedCache == null || targetedCache.Record == null ||
                 !string.Equals(GetMember(targetedCache.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
@@ -1481,11 +1482,14 @@ namespace EnRAGECompanionsExtension
             }
 
             Ped ped = targetedPed;
-            if (ped != null && ped.Health >= ped.MaxHealth)
+            CompanionPersistentState preTreatmentState = GetPersistentState(record, false);
+            bool injuryNeedsTreatment = preTreatmentState != null && preTreatmentState.Injury != null &&
+                preTreatmentState.Injury.IsInjured;
+            if (ped != null && ped.Health >= ped.MaxHealth && !injuryNeedsTreatment)
             {
                 if (PendingFullHealthIds.Remove(id))
                     SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-                InvokeInstance(instance, "ShowSubtitle", name + " ya tiene la salud al máximo.");
+                InvokeInstance(instance, "ShowSubtitle", name + " ya tiene la salud al máximo y no hay ninguna herida pendiente.");
                 return;
             }
 
@@ -4377,7 +4381,7 @@ namespace EnRAGECompanionsExtension
                 try
                 {
                     Ped ped = cached.Ped;
-                    if (!ped.Exists()) continue;
+                    if (!ped.Exists() || IsExiledRosterRecord(cached.Record)) continue;
                     string id = GetMember(cached.Record, "Id") as string;
                     if (!ped.IsDead && !ped.IsIncapacitated) continue;
 
@@ -5037,7 +5041,11 @@ namespace EnRAGECompanionsExtension
                 }
             }
 
-            if (stateChanged) SavePersistentState(state);
+            if (stateChanged)
+            {
+                SavePersistentState(state);
+                try { InvokeInstance(instance, "SaveRoster"); } catch { }
+            }
             if (!wasIncapacitated)
                 InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") +
                     " ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse.");
