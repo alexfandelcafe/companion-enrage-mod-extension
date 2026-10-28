@@ -1602,7 +1602,20 @@ namespace EnRAGECompanionsExtension
                 return;
             }
 
-            ApplyConfiguredMedicineHealing(ped);
+            bool treatmentApplied = false;
+            try { treatmentApplied = ApplyConfiguredMedicineHealing(ped); }
+            catch (Exception ex) { Log("Medicine treatment failed for " + id + ": " + Unwrap(ex)); }
+            if (!treatmentApplied)
+            {
+                bool refunded = TryRefundMedicineCharge(_recruitMedicineCostCents);
+                InvokeInstance(instance, "ShowSubtitle", refunded
+                    ? "El remedio no pudo aplicarse; se devolvió el cobro."
+                    : "El remedio no pudo aplicarse y no se pudo confirmar la devolución. Revisa el registro del mod.");
+                if (!refunded)
+                    Log("CRITICAL: medicine treatment failed and refund could not be confirmed for " + id + ".");
+                return;
+            }
+
             CompanionPersistentState injuryState = GetPersistentState(record, true);
             if (injuryState != null && injuryState.Injury != null && injuryState.Injury.IsInjured)
             {
@@ -1659,12 +1672,46 @@ namespace EnRAGECompanionsExtension
             return null;
         }
 
-        private static void ApplyConfiguredMedicineHealing(Ped ped)
+        private static bool ApplyConfiguredMedicineHealing(Ped ped)
         {
-            if (ped == null || !ped.Exists() || ped.IsDead) return;
-            int maxHealth = Math.Max(1, ped.MaxHealth);
-            int amount = Math.Max(1, (int)Math.Ceiling(maxHealth * _medicineHealingPercent / 100.0));
-            ped.Health = Math.Min(maxHealth, Math.Max(1, ped.Health) + amount);
+            if (ped == null || !ped.Exists() || ped.IsDead) return false;
+
+            try
+            {
+                int maxHealth = ped.MaxHealth;
+                if (maxHealth <= 0) return false;
+
+                int previousHealth = ped.Health;
+                int amount = Math.Max(1, (int)Math.Ceiling(maxHealth * _medicineHealingPercent / 100.0));
+                int targetHealth = Math.Min(maxHealth, Math.Max(1, previousHealth) + amount);
+                if (targetHealth > previousHealth)
+                    ped.Health = targetHealth;
+
+                // Do not report a successful treatment just because the setter did not throw.
+                // The native ped must still exist, be alive, and expose the requested health.
+                return ped.Exists() && !ped.IsDead && ped.Health >= targetHealth && ped.Health > 0;
+            }
+            catch (Exception ex)
+            {
+                Log("Could not apply or verify companion medicine: " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        private static bool TryRefundMedicineCharge(int amountCents)
+        {
+            if (amountCents <= 0) return true;
+            try
+            {
+                // Signature confirmed in the bundled enRAGE decompilation: cents plus an add-reason hash.
+                MONEY._MONEY_INCREMENT_CASH_BALANCE(amountCents, MISC.GET_HASH_KEY("ADD_REASON_DEFAULT"));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("Medicine refund failed: " + Unwrap(ex));
+                return false;
+            }
         }
 
         private static void HealPedToMaximum(Ped ped)
@@ -3175,7 +3222,35 @@ namespace EnRAGECompanionsExtension
             try { maxHealth = ped.MaxHealth; } catch { }
             if (maxHealth <= 0) maxHealth = 100;
             int recoveryHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
-            try { ped.Health = Math.Max(ped.Health, recoveryHealth); } catch { }
+            try
+            {
+                int currentHealth = ped.Health;
+                if (currentHealth < recoveryHealth)
+                    ped.Health = recoveryHealth;
+            }
+            catch (Exception ex)
+            {
+                Log("Could not restore health while helping incapacitated companion: " + Unwrap(ex));
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo restaurar la salud; el compañero sigue incapacitado.");
+                return;
+            }
+
+            // Do not clear the persisted incapacitation state unless reanimation and health
+            // restoration have actually taken effect on the live entity.
+            try
+            {
+                if (!ped.Exists() || ped.IsDead || ped.Health <= 0)
+                {
+                    InvokeInstance(instance, "ShowSubtitle", "El compañero todavía no puede levantarse; sigue incapacitado.");
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Could not verify companion recovery: " + Unwrap(ex));
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo verificar la recuperación; el compañero sigue incapacitado.");
+                return;
+            }
 
             try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
             bool stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true });
