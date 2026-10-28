@@ -170,7 +170,7 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 ### Fase 5 — posturas y personalización
 
 - El prompt de postura aparece al apuntar a un compañero activo solo cuando la detección encuentra un ped que está atacando al jugador. `Fuego a mi señal` requiere disparo del jugador en el momento actual o dentro de una ventana de 2,5 segundos.
-- La persistencia de apariencia trata por separado el hash de outfit, las variaciones estándar de ropa, props (incluido el slot común del sombrero) y el hash del arma actualmente equipada.
+- La persistencia de apariencia trata por separado el hash de outfit, las variaciones estándar de ropa, props (incluido el slot común del sombrero) y el hash del arma actualmente equipada; falta verificar que los wrappers disponibles realmente capturen/apliquen esos valores en la versión instalada.
 - No se enumera todo el inventario de armas ni su munición. Las variaciones por componente tampoco guardan todos los materiales, mapas de albedo/normal o piezas YMT personalizadas. No hay una API compartida confirmada para integrar directamente `Sir Joseph's Ultimate YMT Helper`; la integración completa YMT sigue pendiente.
 
 
