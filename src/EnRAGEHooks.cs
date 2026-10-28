@@ -3898,6 +3898,8 @@ namespace EnRAGECompanionsExtension
             // Capture the current outfit before RestoreReal. If the native returns zero, keep any
             // previously saved non-zero hash rather than replacing it with an invalid value.
             if (ped != null && ped.Exists()) CaptureRecruitOutfitIfMissing(GetField(companion, "Rec"), ped, true);
+            SetPersistentFollowState(GetField(companion, "Rec"), CompanionFollowState.Dismissed, null);
+            LastIndividualOrderTaskAt.Remove(GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
@@ -4239,6 +4241,10 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("AffinityTreatmentGain")) missingSettings.Add("AffinityTreatmentGain=3");
                     if (!existingKeys.Contains("EnableAppearancePersistence")) missingSettings.Add("EnableAppearancePersistence=true");
                     if (!existingKeys.Contains("PreserveSavedOutfit")) missingSettings.Add("PreserveSavedOutfit=true");
+                    if (!existingKeys.Contains("EnableIndividualOrders")) missingSettings.Add("EnableIndividualOrders=true");
+                    if (!existingKeys.Contains("EnableWaitMode")) missingSettings.Add("EnableWaitMode=true");
+                    if (!existingKeys.Contains("WaitRadius")) missingSettings.Add("WaitRadius=8.0");
+                    if (!existingKeys.Contains("RestDurationSeconds")) missingSettings.Add("RestDurationSeconds=60");
                     if (missingSettings.Count > 0)
                     {
                         File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity and appearance persistence" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
@@ -4279,6 +4285,15 @@ namespace EnRAGECompanionsExtension
                             _enableAppearancePersistence = appearancePersistence;
                         else if (key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool preserveOutfit))
                             _preserveSavedOutfit = preserveOutfit;
+                        else if (key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableOrders))
+                            _enableIndividualOrders = enableOrders;
+                        else if (key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableWait))
+                            _enableWaitMode = enableWait;
+                        else if (key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase) &&
+                                 float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float waitRadius))
+                            _waitRadius = Math.Max(1.0f, Math.Min(50.0f, waitRadius));
+                        else if (key.Equals("RestDurationSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int restDuration))
+                            _restDurationSeconds = Math.Max(10, Math.Min(3600, restDuration));
                     }
                 }
                 else
@@ -4302,7 +4317,11 @@ namespace EnRAGECompanionsExtension
                         "AffinityCombatGain=2\r\n" +
                         "AffinityTreatmentGain=3\r\n" +
                         "EnableAppearancePersistence=true\r\n" +
-                        "PreserveSavedOutfit=true\r\n");
+                        "PreserveSavedOutfit=true\r\n" +
+                        "EnableIndividualOrders=true\r\n" +
+                        "EnableWaitMode=true\r\n" +
+                        "WaitRadius=8.0\r\n" +
+                        "RestDurationSeconds=60\r\n");
                 }
             }
             catch (Exception ex)
