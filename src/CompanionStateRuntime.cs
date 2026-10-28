@@ -32,8 +32,8 @@ namespace EnRAGECompanionsExtension
 
                 try
                 {
-                    var store = new CompanionStateStore(scriptsDirectory);
-                    store.Diagnostic += message => Trace.WriteLine("[EnRAGECompanionsExtension] " + message);
+                    var store = new CompanionStateStore(scriptsDirectory,
+                        message => Trace.WriteLine("[EnRAGECompanionsExtension] " + message));
                     _store = store;
 
                     // Writes only when migration or a newly-created state made the store dirty.
