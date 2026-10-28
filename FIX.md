@@ -163,7 +163,7 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 
 - El controlador muestrea la salud de compañeros activos y registra lesiones si la pérdida puntual alcanza `InjuryDamageThresholdPercent`. Cada lesión tiene una gravedad y un tiempo de recuperación por ID estable.
 - La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
-- El estado `IsIncapacitated` es distinto de la muerte confirmada. El controlador intenta reconocer una caída reciente, conservar `IsAlive` y `PresumedDead`, y recuperar el ped si el wrapper `RESURRECT_PED` está disponible.
+- El estado `IsIncapacitated` es distinto de la muerte confirmada. El controlador consulta también el método de enRAGE `LooksKnockedOut(Ped)` para distinguir una caída/KO de una muerte confirmada; conserva `IsAlive` y `PresumedDead`, y recupera el ped si el wrapper `RESURRECT_PED` está disponible.
 - Al apuntar al compañero incapacitado aparece `Ayudar a levantarse`. La orden restaura salud parcial, prueba `TASK_STAND_UP`, limpia la marca persistente de incapacidad y conserva el miembro en el roster. Si el wrapper no está disponible, puede faltar la animación de levantarse.
 - El remedio usa `RecruitMedicineCostCents`, `MedicineHealingPercent` y `MedicineRecoveryReductionSeconds`. Antes de cobrar valida el objetivo, excluye muertos confirmados y expulsados, y usa un bloqueo temporal por ID para reducir dobles cobros.
 
