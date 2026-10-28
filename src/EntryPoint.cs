@@ -14,6 +14,7 @@ namespace EnRAGECompanionsExtension
 
         public EntryPoint()
         {
+            CompanionStateRuntime.Initialize();
             Tick += OnTick;
         }
 
