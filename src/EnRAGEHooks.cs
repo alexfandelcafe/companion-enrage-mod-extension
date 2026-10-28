@@ -329,6 +329,7 @@ namespace EnRAGECompanionsExtension
                 MaintainDismissedRecruitRelationships(__instance, player);
                 MaintainRecruitedFriendship(__instance);
                 MaintainRecruitedIdentity(__instance);
+                MaintainAffinityTravel(__instance, player);
 
                 // Keep enRAGE's original story-companion interaction. Generic NPCs use a separate
                 // native prompt, rather than mutating _askPed/_askKey and recursively re-entering UpdateAsk.
@@ -561,6 +562,150 @@ namespace EnRAGECompanionsExtension
             return string.Equals(id, "vdl", StringComparison.OrdinalIgnoreCase) ? "Van der Linde" : id;
         }
 
+        private static void RosterMenuDrawPostfix(object __instance)
+        {
+            try
+            {
+                if (!_enableAffinity || __instance == null) return;
+                object record = GetField(__instance, "_detail");
+                if (record == null || !IsRecruitedRosterRecord(record)) return;
+                CompanionPersistentState state = GetPersistentState(record, true);
+                if (state == null) return;
+
+                if (_uiDrawType == null && _mainType != null)
+                    _uiDrawType = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "UiDraw");
+                if (_uiDrawType == null) return;
+
+                if (_uiDrawRect == null)
+                    _uiDrawRect = FindMethod(_uiDrawType, "Rect", 8, p =>
+                        p[0].ParameterType == typeof(float) && p[1].ParameterType == typeof(float) &&
+                        p[2].ParameterType == typeof(float) && p[3].ParameterType == typeof(float) &&
+                        p.Skip(4).All(x => x.ParameterType == typeof(int)));
+                if (_uiDrawText == null)
+                    _uiDrawText = FindMethod(_uiDrawType, "Text", 8, p =>
+                        p[0].ParameterType == typeof(string) && p[1].ParameterType == typeof(float) &&
+                        p[2].ParameterType == typeof(float) && p[3].ParameterType == typeof(float) &&
+                        p.Skip(4).All(x => x.ParameterType == typeof(int)));
+                if (_uiDrawRect == null || _uiDrawText == null) return;
+
+                int affinity = Math.Max(0, Math.Min(100, state.Affinity));
+                float x = 0.665f;
+                float width = 0.235f;
+                _uiDrawRect.Invoke(null, new object[] { x, 0.149f, width, 0.012f, 26, 24, 20, 220 });
+                if (affinity > 0)
+                    _uiDrawRect.Invoke(null, new object[] { x, 0.149f, width * affinity / 100f, 0.012f, 189, 153, 83, 245 });
+                _uiDrawText.Invoke(null, new object[] { "AFINIDAD  " + affinity + "/100", x, 0.129f, 0.20f, 235, 230, 220, 255 });
+            }
+            catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
+        }
+
+        private static CompanionPersistentState GetPersistentState(object record, bool create)
+        {
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            CompanionStateStore store = CompanionStateRuntime.Store;
+            if (store == null) return null;
+            CompanionPersistentState state;
+            if (store.TryGet(id, out state)) return state;
+            if (!create) return null;
+            state = store.GetOrCreate(id);
+            if (store.IsDirty) store.SaveIfDirty();
+            return state;
+        }
+
+        private static void SavePersistentState(CompanionPersistentState state)
+        {
+            if (state == null) return;
+            CompanionStateStore store = CompanionStateRuntime.Store;
+            if (store == null) return;
+            try
+            {
+                store.MarkChanged(state);
+                store.SaveIfDirty();
+            }
+            catch (Exception ex) { Log("Companion state save warning: " + Unwrap(ex)); }
+        }
+
+        private static int ChangeAffinity(object record, int delta)
+        {
+            if (!_enableAffinity) return -1;
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) return -1;
+            state.Affinity = Math.Max(0, Math.Min(100, state.Affinity + delta));
+            SavePersistentState(state);
+            return state.Affinity;
+        }
+
+        private static void AwardAffinity(object record, int gain, string reason)
+        {
+            if (!_enableAffinity || gain <= 0 || record == null) return;
+            int affinity = ChangeAffinity(record, gain);
+            if (affinity >= 0)
+                Log("Affinity +" + gain + " (" + reason + ") for " +
+                    ((GetMember(record, "Name") as string) ?? (GetMember(record, "Id") as string)) + "; now " + affinity + "/100.");
+        }
+
+        private static void MaintainAffinityTravel(object instance, Ped player)
+        {
+            if (!_enableAffinity || _affinityTravelGain <= 0 || _affinityTravelIntervalSeconds <= 0 ||
+                instance == null || player == null || !player.Exists()) return;
+
+            int now = Game.GameTime;
+            IList companions = GetField(instance, "_comps") as IList;
+            if (companions == null) return;
+            HashSet<string> activeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (object companion in companions.Cast<object>().ToArray())
+            {
+                string key = GetField(companion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                    GetFieldInt(companion, "State", 2) == 2) continue;
+
+                object record = GetField(companion, "Rec");
+                string id = GetMember(record, "Id") as string;
+                if (string.IsNullOrWhiteSpace(id)) continue;
+
+                Ped ped = GetField(companion, "Ped") as Ped;
+                if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+                if (ped == null || !ped.Exists() || ped.IsDead || ped.Position.DistanceTo(player.Position) > 60f)
+                {
+                    AffinityTravelTrackers.Remove(id);
+                    continue;
+                }
+
+                activeIds.Add(id);
+                AffinityTravelTracker tracker;
+                if (!AffinityTravelTrackers.TryGetValue(id, out tracker))
+                {
+                    AffinityTravelTrackers[id] = new AffinityTravelTracker { StartedAt = now, StartPosition = player.Position };
+                    continue;
+                }
+
+                if (now < tracker.StartedAt || now - tracker.StartedAt < _affinityTravelIntervalSeconds * 1000)
+                    continue;
+
+                bool travelled = player.Position.DistanceTo(tracker.StartPosition) >= 100f;
+                tracker.StartedAt = now;
+                tracker.StartPosition = player.Position;
+                if (travelled) AwardAffinity(record, _affinityTravelGain, "travel");
+            }
+
+            foreach (string id in AffinityTravelTrackers.Keys.ToArray())
+                if (!activeIds.Contains(id)) AffinityTravelTrackers.Remove(id);
+        }
+
+        private static void AdjustAffinityFromRoster(object instance, object record, int delta)
+        {
+            int affinity = ChangeAffinity(record, delta);
+            if (affinity < 0)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "La afinidad está desactivada en el archivo INI.");
+                return;
+            }
+            string name = GetMember(record, "Name") as string ?? "Tu compañero";
+            InvokeInstance(instance, "ShowSubtitle", name + ": afinidad " + affinity + "/100.");
+        }
+
         private static void DetailActionsPostfix(object __instance, ref List<string> __result)
         {
             try
@@ -590,6 +735,13 @@ namespace EnRAGECompanionsExtension
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
                 if (recruitedRecord)
                 {
+                    __result.Remove("Afinidad");
+                    __result.Remove("Ver afinidad");
+                    if (_enableAffinity)
+                    {
+                        InsertBeforeBack(__result, "Mejorar afinidad (+10)");
+                        InsertBeforeBack(__result, "Reducir afinidad (-10)");
+                    }
                     __result.Remove("Llamarlo");
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
                         InsertBeforeBack(__result, "Llamarlo");
@@ -685,6 +837,11 @@ namespace EnRAGECompanionsExtension
                         return false;
                     }
                     CallRecruitedRosterMember(_latestMainInstance, __instance, record);
+                    return false;
+                }
+                if (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)")
+                {
+                    AdjustAffinityFromRoster(_latestMainInstance, record, action == "Mejorar afinidad (+10)" ? 10 : -10);
                     return false;
                 }
                 if (ExiledRosterIds.Contains(recordIdForConfirmation))
@@ -1398,6 +1555,9 @@ namespace EnRAGECompanionsExtension
             {
                 if (existingPed != null)
                 {
+                    // Capture/restore appearance before adopting the same entity; no clone or second
+                    // roster record should be created for a dismissed recruit.
+                    PreserveRecruitOutfit(record, existingPed);
                     // Adopt the same pedestrian through enRAGE's own path. Setup restores the
                     // active follower relationship and creates a horse for this companion object.
                     try { TASK.CLEAR_PED_TASKS(existingPed.Handle, true, false); } catch { }
@@ -1747,7 +1907,8 @@ namespace EnRAGECompanionsExtension
                 {
                     HideGenericRecruitPrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, 1980406895);
-                    object result = _makePrompt.Invoke(null, new object[] { control, "Cabalga conmigo", true, group });
+                    string promptLabel = IsCachedRecruitedPed(candidate.Handle) ? "Llamarlo" : "Cabalga conmigo";
+                object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
                     _genericPrompt = Convert.ToInt32(result);
                     _genericPromptFor = candidate.Handle;
                     _genericPromptGroup = group;
@@ -2113,6 +2274,9 @@ namespace EnRAGECompanionsExtension
                     p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType) && IsPedType(p[2].ParameterType));
                 if (adopt == null)
                     throw new MissingMethodException(_mainType.FullName, "Adopt(Companion, Ped, Ped)");
+
+                // Snapshot the live world's outfit before enRAGE's Adopt routine changes the ped.
+                PreserveRecruitOutfit(rosterRecord ?? trackedRecord, ped);
 
                 // If this is a recruit that was dismissed earlier, cancel the ambient wander timer
                 // and clear the old walk-away task BEFORE Adopt/Setup installs the companion AI.
@@ -3371,6 +3535,9 @@ namespace EnRAGECompanionsExtension
             Ped horse = GetField(companion, "Horse") as Ped;
             Ped player = Game.Player.Character;
             try { preserveHorse = ped != null && ped.Exists() && ped.IsOnMount && horse != null && horse.Exists(); } catch { }
+            // Capture while the original ped still has its current world outfit, before RestoreReal
+            // or cleanup has a chance to change its component state.
+            if (ped != null && ped.Exists()) PreserveRecruitOutfit(GetField(companion, "Rec"), ped);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
