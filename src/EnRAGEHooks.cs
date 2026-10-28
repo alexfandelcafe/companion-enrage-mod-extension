@@ -1928,7 +1928,9 @@ namespace EnRAGECompanionsExtension
                 ApplyMaximumRecruitFriendship(record);
                 SetPersistentFollowState(record, CompanionFollowState.Following, null);
                 object activeCompanion = FindActiveExtensionCompanion(instance, id);
-                if (activeCompanion != null)
+                // An adopted live pedestrian must re-enter WaitToJoin; when SpawnCompanion created
+                // a replacement, preserve enRAGE's own initial state (normally Ride/state 1).
+                if (activeCompanion != null && existingPed != null)
                 {
                     SetField(activeCompanion, "State", 0);
                     SetField(activeCompanion, "AskedAt", Game.GameTime);
