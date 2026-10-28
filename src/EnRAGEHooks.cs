@@ -741,7 +741,7 @@ namespace EnRAGECompanionsExtension
 
         private static void RosterMenuDrawPostfix(object __instance)
         {
-            // UiDraw.Text's postfix injects the meter next to the actual SENTIMIENTOS header,
+            // Theme.Section's postfix injects the meter next to the actual SENTIMIENTOS header,
             // whose y coordinate changes with each recruit's profile. Clear the context after Draw.
             _activeAffinityDetailRecord = null;
         }
