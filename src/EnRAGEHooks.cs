@@ -58,6 +58,20 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
+        // Individual orders are world prompts bound to the aimed-at companion. They use separate
+        // controls from the stock dismissal and medicine prompts so one prompt cannot replace another.
+        private const int IndividualOrderPromptControl = unchecked((int)0xCEFD9220);
+        private const int IndividualRestPromptControl = unchecked((int)0xDFF812F9);
+        private static int _individualOrderPrompt;
+        private static int _individualOrderPromptFor;
+        private static int _individualOrderPromptGroup;
+        private static bool _individualOrderPromptArmed;
+        private static Ped _individualOrderPromptPed;
+        private static int _individualRestPrompt;
+        private static int _individualRestPromptFor;
+        private static int _individualRestPromptGroup;
+        private static bool _individualRestPromptArmed;
+        private static Ped _individualRestPromptPed;
         private static int _maxCompanions = 3;
         // Default affiliation is Van der Linde for compatibility. Both settings can target an
         // existing faction in enRAGE; the player-friendly relationship group is independent of it.
@@ -342,6 +356,7 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(__instance, "UpdateAsk", player);
                 UpdateGenericRecruitPrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
+                UpdateIndividualOrderPrompts(__instance, player);
 
                 IList list = GetField(__instance, "_comps") as IList;
                 if (list == null || list.Count == 0)
@@ -599,14 +614,14 @@ namespace EnRAGECompanionsExtension
                 if (_uiDrawRect == null || _uiDrawText == null) return;
 
                 int affinity = Math.Max(0, Math.Min(100, state.Affinity));
-                // The bottom row of the detail sheet has spare space to the right of the injected
-                // actions; anchor the meter there instead of covering enRAGE's profile columns.
-                float x = 0.74f;
-                float width = 0.15f;
-                _uiDrawRect.Invoke(null, new object[] { x, 0.839f, width, 0.010f, 26, 24, 20, 220 });
+                // Draw the affinity meter inside the right-hand SENTIMIENTOS area, not in the
+                // bottom action row. Coordinates align with the profile's feelings column.
+                float x = 0.535f;
+                float width = 0.29f;
+                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.548f, 0.30f, 235, 230, 220, 255 });
+                _uiDrawRect.Invoke(null, new object[] { x, 0.572f, width, 0.010f, 26, 24, 20, 220 });
                 if (affinity > 0)
-                    _uiDrawRect.Invoke(null, new object[] { x, 0.839f, width * affinity / 100f, 0.010f, 189, 153, 83, 245 });
-                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, 0.815f, 0.18f, 235, 230, 220, 255 });
+                    _uiDrawRect.Invoke(null, new object[] { x, 0.572f, width * affinity / 100f, 0.010f, 189, 153, 83, 245 });
             }
             catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
         }
@@ -992,35 +1007,11 @@ namespace EnRAGECompanionsExtension
                 if (recruitedRecord)
                 {
                     __result.RemoveAll(action => action != null &&
-                        (action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                         action == "Sígueme" || action == "Quédate aquí" ||
-                         action.StartsWith("Descansar", StringComparison.OrdinalIgnoreCase)));
+                        action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0);
                     if (_enableAffinity)
                     {
                         InsertBeforeBack(__result, "Mejorar afinidad (+10)");
                         InsertBeforeBack(__result, "Reducir afinidad (-10)");
-                    }
-
-                    if (_enableIndividualOrders && anyCompanionFollowing)
-                    {
-                        CompanionPersistentState individualState = GetPersistentState(record, true);
-                        CompanionFollowState followState = individualState == null
-                            ? CompanionFollowState.Following
-                            : individualState.FollowState;
-                        if (followState == CompanionFollowState.Waiting)
-                        {
-                            InsertBeforeBack(__result, "Sígueme");
-                            InsertBeforeBack(__result, "Descansar");
-                        }
-                        else if (followState == CompanionFollowState.Resting)
-                        {
-                            InsertBeforeBack(__result, "Sígueme");
-                        }
-                        else
-                        {
-                            if (_enableWaitMode) InsertBeforeBack(__result, "Quédate aquí");
-                            InsertBeforeBack(__result, "Descansar");
-                        }
                     }
 
                     __result.Remove("Llamarlo");
@@ -1123,21 +1114,6 @@ namespace EnRAGECompanionsExtension
                 if (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)")
                 {
                     AdjustAffinityFromRoster(_latestMainInstance, record, action == "Mejorar afinidad (+10)" ? 10 : -10);
-                    return false;
-                }
-                if (action == "Sígueme" && recruitedRecord && _enableIndividualOrders)
-                {
-                    SetIndividualCompanionOrder(_latestMainInstance, record, CompanionFollowState.Following);
-                    return false;
-                }
-                if (action == "Quédate aquí" && recruitedRecord && _enableIndividualOrders && _enableWaitMode)
-                {
-                    SetIndividualCompanionOrder(_latestMainInstance, record, CompanionFollowState.Waiting);
-                    return false;
-                }
-                if (action == "Descansar" && recruitedRecord && _enableIndividualOrders)
-                {
-                    SetIndividualCompanionOrder(_latestMainInstance, record, CompanionFollowState.Resting);
                     return false;
                 }
                 if (ExiledRosterIds.Contains(recordIdForConfirmation))
@@ -2018,6 +1994,27 @@ namespace EnRAGECompanionsExtension
             return true;
         }
 
+        private static void NormalizeExtensionRecruitHistory(object record)
+        {
+            if (record == null) return;
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id) ||
+                !(id.StartsWith("extcomp_", StringComparison.OrdinalIgnoreCase) ||
+                  id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase))) return;
+
+            int kills = 0;
+            try { kills = Convert.ToInt32(GetMember(record, "TimesKilledPlayer"), CultureInfo.InvariantCulture); } catch { }
+            // Only repair the default/fabricated kill marker when the actual kill counter is zero.
+            // Records with a genuine recorded player kill are left untouched.
+            if (kills == 0)
+            {
+                SetEnumMember(record, "Origin", "GangMember");
+                SetMember(record, "KillLocation", string.Empty);
+                SetMember(record, "KilledPlayerAt", DateTime.MinValue);
+                SetMember(record, "KilledByPlayer", false);
+            }
+        }
+
         private static bool ApplyMaximumRecruitFriendship(object record)
         {
             if (record == null) return false;
@@ -2282,6 +2279,123 @@ namespace EnRAGECompanionsExtension
                 HideGenericRecruitPrompt();
                 Log("Generic recruitment prompt failed: " + Unwrap(ex));
             }
+        }
+
+        // While aiming at an active extension companion, expose the individual orders as world
+        // prompts. These are deliberately separate from the roster sheet and from Dejar de seguirme.
+        private static void UpdateIndividualOrderPrompts(object instance, Ped player)
+        {
+            try
+            {
+                if (!_enableIndividualOrders || player == null || !player.Exists() || player.IsInCombat)
+                {
+                    HideIndividualOrderPrompts();
+                    return;
+                }
+
+                Ped target = FindAimedRecruitedPed(instance, player);
+                CachedRosterRecord cached;
+                if (target == null || !target.Exists() ||
+                    !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
+                    cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
+                    IsExiledRosterRecord(cached.Record) || !IsRosterRecordCurrentlyFollowing(instance, cached.Record))
+                {
+                    HideIndividualOrderPrompts();
+                    return;
+                }
+
+                CompanionPersistentState state = GetPersistentState(cached.Record, true);
+                CompanionFollowState current = state == null ? CompanionFollowState.Following : state.FollowState;
+                CompanionFollowState primaryOrder = current == CompanionFollowState.Following
+                    ? CompanionFollowState.Waiting : CompanionFollowState.Following;
+                string primaryLabel = primaryOrder == CompanionFollowState.Waiting ? "Quédate aquí" : "Sígueme";
+                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
+                UpdateIndividualOrderPrompt(instance, target, group, primaryLabel, IndividualOrderPromptControl,
+                    primaryOrder, true, cached.Record);
+
+                if (current == CompanionFollowState.Resting)
+                    HideIndividualOrderPrompt(false);
+                else
+                    UpdateIndividualOrderPrompt(instance, target, group, "Descansar", IndividualRestPromptControl,
+                        CompanionFollowState.Resting, false, cached.Record);
+            }
+            catch (Exception ex)
+            {
+                HideIndividualOrderPrompts();
+                Log("Individual order prompt failed: " + Unwrap(ex));
+            }
+        }
+
+        private static void UpdateIndividualOrderPrompt(object instance, Ped target, int group, string label,
+            int control, CompanionFollowState order, bool primary, object record)
+        {
+            int prompt = primary ? _individualOrderPrompt : _individualRestPrompt;
+            int promptFor = primary ? _individualOrderPromptFor : _individualRestPromptFor;
+            int promptGroup = primary ? _individualOrderPromptGroup : _individualRestPromptGroup;
+            bool armed = primary ? _individualOrderPromptArmed : _individualRestPromptArmed;
+            Ped promptPed = primary ? _individualOrderPromptPed : _individualRestPromptPed;
+
+            if (prompt == 0 || promptFor != target.Handle || promptGroup != group || !IsPromptValid(prompt))
+            {
+                if (primary) HideIndividualOrderPrompt(true); else HideIndividualOrderPrompt(false);
+                object controlArg = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, control);
+                prompt = Convert.ToInt32(_makePrompt.Invoke(null, new object[] { controlArg, label, true, group }));
+                promptFor = target.Handle;
+                promptGroup = group;
+                armed = false;
+            }
+            promptPed = target;
+            if (prompt != 0)
+            {
+                HUD._UI_PROMPT_SET_VISIBLE(prompt, true);
+                HUD._UI_PROMPT_SET_ENABLED(prompt, true);
+                if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt))
+                {
+                    armed = true;
+                    SaveIndividualOrderPromptState(primary, prompt, promptFor, promptGroup, armed, promptPed);
+                    return;
+                }
+                if (armed)
+                {
+                    Ped selected = promptPed;
+                    SaveIndividualOrderPromptState(primary, prompt, promptFor, promptGroup, false, promptPed);
+                    if (selected != null && selected.Exists() && selected.Handle == target.Handle)
+                        SetIndividualCompanionOrder(instance, record, order);
+                    return;
+                }
+            }
+            SaveIndividualOrderPromptState(primary, prompt, promptFor, promptGroup, armed, promptPed);
+        }
+
+        private static void SaveIndividualOrderPromptState(bool primary, int prompt, int promptFor,
+            int promptGroup, bool armed, Ped promptPed)
+        {
+            if (primary)
+            {
+                _individualOrderPrompt = prompt; _individualOrderPromptFor = promptFor;
+                _individualOrderPromptGroup = promptGroup; _individualOrderPromptArmed = armed;
+                _individualOrderPromptPed = promptPed;
+            }
+            else
+            {
+                _individualRestPrompt = prompt; _individualRestPromptFor = promptFor;
+                _individualRestPromptGroup = promptGroup; _individualRestPromptArmed = armed;
+                _individualRestPromptPed = promptPed;
+            }
+        }
+
+        private static void HideIndividualOrderPrompt(bool primary)
+        {
+            int prompt = primary ? _individualOrderPrompt : _individualRestPrompt;
+            if (prompt != 0 && IsPromptValid(prompt))
+                try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
+            SaveIndividualOrderPromptState(primary, 0, 0, 0, false, null);
+        }
+
+        private static void HideIndividualOrderPrompts()
+        {
+            HideIndividualOrderPrompt(true);
+            HideIndividualOrderPrompt(false);
         }
 
         // Shows a contextual treatment prompt when the player is actively aiming at one of the
@@ -3382,6 +3496,7 @@ namespace EnRAGECompanionsExtension
                 // The character is a recruited gang member, not one of enRAGE's scripted cast members.
                 SetStoryFlag(existingRecord, false);
                 EnsureRosterProfileData(instance, existingRecord);
+                NormalizeExtensionRecruitHistory(existingRecord);
                 return existingRecord;
             }
 
@@ -3443,8 +3558,13 @@ namespace EnRAGECompanionsExtension
             SetMember(created, "Rank", 1);
             SetMember(created, "RankXp", 0);
             SetMember(created, "PresumedDead", false);
-            SetMember(created, "KillLocation", zone);
-            SetMember(created, "KilledPlayerAt", DateTime.Now);
+            // A new recruit has no player-kill history. NemesisRecord's enum default is Killed,
+            // so leaving Origin untouched fabricates the grudge text "te mató" on the character sheet.
+            SetMember(created, "KillLocation", string.Empty);
+            SetMember(created, "KilledPlayerAt", DateTime.MinValue);
+            SetMember(created, "TimesKilledPlayer", 0);
+            SetMember(created, "KilledByPlayer", false);
+            SetEnumMember(created, "Origin", "GangMember");
             SetMember(created, "FormerGang", null);
             SetMember(created, "Affiliation", null);
             SetMember(created, "BossId", null);
@@ -3452,6 +3572,7 @@ namespace EnRAGECompanionsExtension
             SetMember(created, "CampKnown", false);
             SetStoryFlag(created, false);
             EnsureRosterProfileData(instance, created);
+            NormalizeExtensionRecruitHistory(created);
 
             newlyCreated = true;
             Log("Prepared roster record " + name + " for faction '" + targetGang + "', model=0x" + modelHash.ToString("X8") + ".");
