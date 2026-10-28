@@ -208,6 +208,24 @@ namespace EnRAGECompanionsExtension
             Save();
         }
 
+        internal static void OnCalled(string id, Ped ped)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            CompanionPersistentState state = GetState(id);
+            if (state == null) return;
+
+            state.Order = CompanionOrder.Following;
+            state.RestStartedUtcTicks = 0L;
+            if (state.Stance == CompanionCombatStance.HoldPosition ||
+                state.Stance == CompanionCombatStance.ProtectArea)
+                state.Stance = CompanionCombatStance.FollowOrders;
+            LastStandStillPedHandle.Remove(id);
+            LastAnchorTaskAt.Remove(id);
+            if (IsUsablePed(ped))
+                TrySetBlockingEvents(ped, false);
+            Save();
+        }
+
         internal static void SaveAnchor(string id, Ped ped)
         {
             if (!IsUsablePed(ped)) return;
