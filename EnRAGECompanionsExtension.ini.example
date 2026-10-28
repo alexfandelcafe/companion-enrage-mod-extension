@@ -1,13 +1,55 @@
-﻿; Copy to scripts/EnRAGECompanionsExtension.ini or let the plugin create it.
+; EnRAGE Companions Extension. Copiar a scripts/EnRAGECompanionsExtension.ini
+; Los valores por defecto existentes se conservan; las claves que falten se añaden al iniciar.
 MaxCompanions=3
-; Existing enRAGE faction ID to assign to recruited NPCs. Default: Van der Linde (vdl).
-; For a custom faction, use its exact ID from enRAGE's faction definition.
+; Facción de enRAGE ya existente. vdl mantiene compatibilidad con la banda de Van der Linde.
 RecruitGangId=vdl
-; For custom factions, set this to the same ID as RecruitGangId.
-; vdl is special: it mirrors recruits into enRAGE's built-in Van der Linde StoryRoster.
-; Other existing factions use the normal Roster list filtered by Gang ID.
+; Para facciones personalizadas, usar el mismo ID real que RecruitGangId.
 RecruitRosterId=vdl
-; True permits friendly fire; false blocks player targeting of recruited members.
 AllowFriendlyFire=true
-; Force the grey/disabled target dot even when friendly fire is enabled.
 PreventTargeting=false
+
+; --- Órdenes individuales y espera ---
+EnableIndividualOrders=true
+EnableWaitMode=true
+; Radio en metros/unidades del juego alrededor de la posición guardada.
+WaitRadius=8.0
+
+; --- Heridas y tratamiento ---
+EnableInjurySystem=true
+; Daño acumulado en una ventana de 10 segundos para marcar una herida.
+InjuryDamageThreshold=25
+; Multiplicador de velocidad al caminar herido; 1.0 = velocidad normal.
+InjuryMoveRateMultiplier=0.65
+; Tiempo de descanso necesario para reducir un nivel de gravedad.
+InjuryRecoverySeconds=300
+; Precio en centavos; 100 = $1.00.
+MedicineCostCents=100
+; Niveles de gravedad que elimina el remedio si MedicineRestoresFullHealth=false.
+MedicineInjuryReduction=1
+; Conserva la cura completa de salud y elimina las heridas de una vez.
+MedicineRestoresFullHealth=true
+; Fracción de la salud perdida que recupera el remedio si no cura al máximo.
+MedicineHealthRestoreFraction=0.50
+
+; --- Afinidad ---
+EnableAffinity=true
+; Incremento de viaje como máximo cada tantos segundos de acompañamiento válido.
+AffinityTravelIntervalSeconds=300
+AffinityTravelGain=1
+AffinityCombatGain=2
+AffinityTreatmentGain=3
+
+; --- Posturas de combate ---
+EnableCombatStances=true
+ProtectAreaRadius=25.0
+; Si el native para saber si el jugador dispara no está disponible, Fuego a mi señal queda bloqueado.
+FireOnSignalOnly=true
+FireSignalWindowMs=12000
+
+; --- Apariencia ---
+EnableAppearancePersistence=true
+PreserveSavedOutfit=true
+; En esta versión, ropa separada, sombrero y armas están reservados y desactivados.
+EnableClothingComponentPersistence=false
+EnableHatPersistence=false
+EnableWeaponPersistence=false
