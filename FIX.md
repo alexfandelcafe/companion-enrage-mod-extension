@@ -153,12 +153,27 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 
 - Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` cambia según el estado y `Descansar` tiene su prompt separado; los controles se distinguen del prompt `Dejar de seguirme` y del remedio.
 - `Quédate aquí` guarda coordenadas por ID estable de roster y evita que el ciclo normal `WaitToJoin/Ride` sobrescriba la tarea de espera. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
-- `Descansar` mantiene el anclaje durante `RestDurationSeconds`, luego elimina el estado de lesión persistente, restaura la salud actual y vuelve a `Following`. Tanto el temporizador como el estado se almacenan en el JSON.
+- `Descansar` mantiene el anclaje durante `RestDurationSeconds`, intenta iniciar una escena de sentarse una sola vez, y vuelve a `Following` al terminar. La curación/limpieza de lesión depende de `RestHealsInjuries`. Si la API no expone el wrapper de escenario, se conserva el fallback de espera pasiva.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
-- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode`, `WaitRadius` y `RestDurationSeconds` al INI autogenerado y al ejemplo. La afinidad se dibuja en la zona `SENTIMIENTOS` en lugar de la fila de botones.
+- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode`, `WaitRadius` y `RestDurationSeconds` al INI autogenerado y al ejemplo. La afinidad se dibuja en la zona `SENTIMIENTOS` del perfil, fuera de la fila de botones.
 - Los registros de extensión con `TimesKilledPlayer=0` se corrigen para no heredar `Origin=Killed` por defecto, que provocaba el texto falso `te mató`. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
+
+### Fase 4 — heridas e incapacitación
+
+- El controlador muestrea la salud de compañeros activos y registra lesiones si la pérdida puntual alcanza `InjuryDamageThresholdPercent`. Cada lesión tiene una gravedad y un tiempo de recuperación por ID estable.
+- La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
+- El estado `IsIncapacitated` es distinto de la muerte confirmada. El controlador intenta reconocer una caída reciente, conservar `IsAlive` y `PresumedDead`, y recuperar el ped si el wrapper `RESURRECT_PED` está disponible.
+- Al apuntar al compañero incapacitado aparece `Ayudar a levantarse`. La orden restaura salud parcial, prueba `TASK_STAND_UP`, limpia la marca persistente de incapacidad y conserva el miembro en el roster. Si el wrapper no está disponible, puede faltar la animación de levantarse.
+- El remedio usa `RecruitMedicineCostCents`, `MedicineHealingPercent` y `MedicineRecoveryReductionSeconds`. Antes de cobrar valida el objetivo, excluye muertos confirmados y expulsados, y usa un bloqueo temporal por ID para reducir dobles cobros.
+
+### Fase 5 — posturas y personalización
+
+- El prompt de postura aparece al apuntar a un compañero activo solo cuando la detección encuentra un ped que está atacando al jugador. `Fuego a mi señal` requiere disparo del jugador en el momento actual o dentro de una ventana de 2,5 segundos.
+- La persistencia de apariencia trata por separado el hash de outfit, las variaciones estándar de ropa, props (incluido el slot común del sombrero) y el hash del arma actualmente equipada.
+- No se enumera todo el inventario de armas ni su munición. Las variaciones por componente tampoco guardan todos los materiales, mapas de albedo/normal o piezas YMT personalizadas. No hay una API compartida confirmada para integrar directamente `Sir Joseph's Ultimate YMT Helper`; la integración completa YMT sigue pendiente.
+
 
 ### Pendiente y verificación
 
-No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. La persistencia de componentes individuales de ropa, sombrero y armas tampoco está implementada; esa limitación es independiente de la Fase 3.
+No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. La personalización estándar de componentes, props y arma equipada ya intenta capturarse/restaurarse mediante wrappers nativos reflexivos; faltan inventario completo de armas/munición y datos YMT avanzados. No se ha compilado ni verificado dentro del juego.
