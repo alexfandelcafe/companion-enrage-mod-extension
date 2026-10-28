@@ -2226,10 +2226,39 @@ namespace EnRAGECompanionsExtension
                 if (method == null) return 0;
 
                 object result = method.Invoke(null, new object[] { horse.Handle, false });
-                available = true;
-                if (result == null) return 0;
-                if (result is int handle) return handle;
-                if (result is Ped rider && rider.Exists()) return rider.Handle;
+                if (result == null)
+                {
+                    available = true;
+                    return 0;
+                }
+                if (result is int handle)
+                {
+                    available = true;
+                    return handle;
+                }
+                if (result is uint unsignedHandle)
+                {
+                    available = true;
+                    return unchecked((int)unsignedHandle);
+                }
+                if (result is long longHandle)
+                {
+                    available = true;
+                    return unchecked((int)longHandle);
+                }
+                if (result is ulong unsignedLongHandle)
+                {
+                    available = true;
+                    return unchecked((int)unsignedLongHandle);
+                }
+                if (result is Ped rider)
+                {
+                    available = true;
+                    return rider.Exists() ? rider.Handle : 0;
+                }
+
+                // Unknown wrapper return type: fail closed rather than treating an occupied horse as free.
+                available = false;
                 return 0;
             }
             catch (Exception ex)
