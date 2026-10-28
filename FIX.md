@@ -138,3 +138,17 @@ Estado: cambio de código fuente sin compilación ni prueba in-game en este ento
 - El outfit auxiliar es un archivo de texto local en la carpeta `scripts`, independiente de `SaveRoster`. Mantenerlo junto con el archivo de la partida si se desea conservar la apariencia de esos reclutas.
 
 Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 dentro de este entorno. Comprobar in-game que el hash de outfit se capture, que la ropa reaparezca igual tras llamar al NPC y que un expulsado ya no muestre el prompt del remedio.
+
+
+## Fase 2 — persistencia y migración
+
+- Añadidos modelos persistentes independientes del handle de la entidad.
+- Añadido `EnRAGECompanionsExtension.companions.json`, esquema versionado (versión 1), normalización de enums, afinidad, posición, herida y listas de apariencia.
+- La escritura se realiza mediante archivo temporal y sustitución con copia de respaldo cuando la plataforma lo permite; si falla la operación principal, se intenta una sustitución alternativa.
+- Se conserva el archivo anterior `EnRAGECompanionsExtension.outfits.txt`; la importación lee los pares `ID|HASH_HEXADECIMAL` sin eliminar el original.
+- La carga tolera registros inválidos y archivos ausentes. Un JSON ilegible o con versión no admitida se conserva renombrándolo como archivo de cuarentena antes de continuar con un almacén vacío y la importación legacy.
+- El almacén se inicializa desde `EntryPoint`; el guardado de migración se realiza solo si hay cambios.
+
+### Pendiente y verificación
+
+Esta fase no conecta aún los estados nuevos a las tareas de IA ni a los prompts. Tampoco implementa natives de ropa, sombreros o armas. La compilación y las pruebas dentro del juego siguen pendientes porque requieren .NET Framework/MSBuild y el `ScriptHookRDRNetAPI.dll` de la instalación objetivo.
