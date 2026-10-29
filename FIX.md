@@ -130,23 +130,19 @@ La extensión usa la relación de jugador para mantener amistosos a los reclutas
 Estado: cambio de código fuente sin compilación ni prueba in-game en este entorno.
 
 
-## 13. Exclusión del remedio tras expulsión y persistencia del outfit
+## 13. Exclusión del remedio tras expulsión
 
 - Si el ID de roster está en `ExiledRosterIds`, `Dar remedio ($1)` ya no se muestra aunque el NPC expulsado siga físicamente cerca. La ruta que resuelve objetivo, el estado del prompt y el handler de la cura verifican la expulsión; por tanto no se cobra ni se cura a un miembro expulsado.
-- Al reclutar por primera vez, la extensión lee el hash del meta-outfit mediante `_GET_PED_META_OUTFIT_HASH` y lo persiste por ID en `EnRAGECompanionsExtension.outfits.txt`. Al volver a crear el ped, después de la rutina `Setup` de enRAGE, intenta equipar el hash con `_EQUIP_META_PED_OUTFIT` y actualizar la variación con `_UPDATE_PED_VARIATION`. Al reutilizar el mismo NPC vivo, aplica el outfit persistido en vez de aceptar una variación aleatoria nueva.
-- Para registros `extcomp_`/`extvdl_` de versiones anteriores, `RecordAt` intenta capturar el outfit actual la primera vez que enRAGE vuelve a resolver el registro mientras el ped siga presente. Si la entidad anterior ya desapareció y el registro antiguo no tiene hash guardado, la primera variación del reemplazo se convierte en la nueva base persistente. Si el hash no está disponible o vale cero, no se inventa un outfit sustituto: se deja que enRAGE genere su apariencia y el log explica que no pudo guardar el outfit.
-- El outfit auxiliar es un archivo de texto local en la carpeta `scripts`, independiente de `SaveRoster`. Mantenerlo junto con el archivo de la partida si se desea conservar la apariencia de esos reclutas.
 
-Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 dentro de este entorno. Comprobar in-game que el hash de outfit se capture, que la ropa reaparezca igual tras llamar al NPC y que un expulsado ya no muestre el prompt del remedio.
-
+Esta comprobación está implementada a nivel de código fuente; sigue pendiente su validación dentro de RDR2.
 
 ## Fase 2 — persistencia y migración
 
-- Añadidos modelos persistentes independientes del handle de la entidad.
-- Añadido `EnRAGECompanionsExtension.companions.json`, esquema versionado (versión 1), normalización de enums, afinidad, posición, herida y listas de apariencia.
+- Añadidos modelos persistentes independientes del handle del ped.
+- Añadido `EnRAGECompanionsExtension.companions.json`, esquema versionado (versión 2), normalización de enums, afinidad, posición, lesión, temporizador de descanso y preferencia de montura/postura.
 - La escritura se realiza mediante archivo temporal y sustitución con copia de respaldo cuando la plataforma lo permite; si falla la operación principal, se intenta una sustitución alternativa.
-- Se conserva el archivo anterior `EnRAGECompanionsExtension.outfits.txt`; la importación lee los pares `ID|HASH_HEXADECIMAL` sin eliminar el original.
-- La carga tolera registros inválidos y archivos ausentes. Un JSON ilegible o con versión no admitida se conserva renombrándolo como archivo de cuarentena antes de continuar con un almacén vacío y la importación legacy.
+- Si falta el JSON principal o no se puede leer, el almacén intenta restaurar el backup `.bak`; el archivo ilegible se conserva en cuarentena cuando el sistema de archivos lo permite.
+- El esquema anterior se sigue leyendo para conservar afinidad, postura, montura, posición, lesión y temporizador de descanso. Los campos retirados no se importan ni se vuelven a guardar; los archivos auxiliares de versiones anteriores se ignoran.
 - El almacén se inicializa desde `EntryPoint`; el guardado de migración se realiza solo si hay cambios.
 
 ### Fase 3 — órdenes individuales y descanso
@@ -167,16 +163,14 @@ Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 den
 - Al apuntar al compañero incapacitado aparece `Ayudar a levantarse`. La orden restaura salud parcial, prueba `TASK_STAND_UP`, limpia la marca persistente de incapacidad y conserva el miembro en el roster. Si el wrapper no está disponible, puede faltar la animación de levantarse.
 - El remedio usa `RecruitMedicineCostCents`, `MedicineHealingPercent` y `MedicineRecoveryReductionSeconds`. Antes de cobrar valida el objetivo, excluye muertos confirmados y expulsados, y usa un bloqueo temporal por ID para reducir dobles cobros.
 
-### Fase 5 — posturas y personalización
+### Fase 5 — posturas de combate
 
 - El prompt de postura aparece al apuntar a un compañero activo solo cuando la detección encuentra un ped que está atacando al jugador. `Fuego a mi señal` requiere disparo del jugador en el momento actual o dentro de una ventana de 2,5 segundos.
-- La persistencia de apariencia trata por separado el hash de outfit, las variaciones estándar de ropa, props (incluido el slot común del sombrero) y el hash del arma actualmente equipada; falta verificar que los wrappers disponibles realmente capturen/apliquen esos valores en la versión instalada.
-- No se enumera todo el inventario de armas ni su munición. Las variaciones por componente tampoco guardan todos los materiales, mapas de albedo/normal o piezas YMT personalizadas. No hay una API compartida confirmada para integrar directamente `Sir Joseph's Ultimate YMT Helper`; la integración completa YMT sigue pendiente.
 
 
 ### Pendiente y verificación
 
-No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. La personalización estándar de componentes, props y arma equipada ya intenta capturarse/restaurarse mediante wrappers nativos reflexivos; faltan inventario completo de armas/munición y datos YMT avanzados. No se ha compilado ni verificado dentro del juego.
+No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. No se ha compilado ni verificado dentro del juego.
 
 
 ### Endurecimiento adicional — tratamiento, reincorporación y recuperación del JSON
