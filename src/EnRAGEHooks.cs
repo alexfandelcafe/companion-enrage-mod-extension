@@ -266,16 +266,6 @@ namespace EnRAGECompanionsExtension
                     if (detailActions != null) _harmony.Patch(detailActions, postfix: Hook(nameof(DetailActionsPostfix)));
                     if (activateDetail != null) _harmony.Patch(activateDetail, prefix: Hook(nameof(ActivateDetailPrefix)));
                     if (handleDetailKey != null) _harmony.Patch(handleDetailKey, prefix: Hook(nameof(HandleDetailKeyPrefix)));
-                    MethodInfo drawRoster = FindMethod(_rosterMenuType, "Draw", 0);
-                    if (drawRoster != null)
-                        _harmony.Patch(drawRoster, prefix: Hook(nameof(RosterMenuDrawPrefix)), postfix: Hook(nameof(RosterMenuDrawPostfix)));
-                    Type uiDraw = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "UiDraw");
-                    Type themeType = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "Theme");
-                    MethodInfo affinitySection = FindMethod(themeType, "Section", 5, p =>
-                        p[0].ParameterType == typeof(string) && p[1].ParameterType == typeof(float) &&
-                        p[2].ParameterType == typeof(float) && p[3].ParameterType == typeof(float));
-                    if (affinitySection != null)
-                        _harmony.Patch(affinitySection, postfix: Hook(nameof(AffinitySectionPostfix)));
                 }
                 _harmony.Patch(ask, prefix: Hook(nameof(AskPrefix)));
                 // enRAGE's social prompt uses the same context control and target group. When a
@@ -698,69 +688,6 @@ namespace EnRAGECompanionsExtension
             return string.Equals(id, "vdl", StringComparison.OrdinalIgnoreCase) ? "Van der Linde" : id;
         }
 
-        private static void RosterMenuDrawPrefix(object __instance)
-        {
-            try
-            {
-                object record = GetField(__instance, "_detail");
-                _activeAffinityDetailRecord = _enableAffinity && IsRecruitedRosterRecord(record) ? record : null;
-            }
-            catch
-            {
-                _activeAffinityDetailRecord = null;
-            }
-        }
-
-        private static void RosterMenuDrawPostfix(object __instance)
-        {
-            // Theme.Section's postfix injects the meter next to the actual SENTIMIENTOS header,
-            // whose y coordinate changes with each recruit's profile. Clear the context after Draw.
-            _activeAffinityDetailRecord = null;
-        }
-
-        private static void AffinitySectionPostfix(object[] __args)
-        {
-            try
-            {
-                if (!_enableAffinity || __args == null || __args.Length < 4 ||
-                    !string.Equals(__args[0] as string, "SENTIMIENTOS", StringComparison.OrdinalIgnoreCase))
-                    return;
-
-                object record = _activeAffinityDetailRecord;
-                if (record == null || !IsRecruitedRosterRecord(record)) return;
-                CompanionPersistentState state = GetPersistentState(record, true);
-                if (state == null) return;
-
-                if (_uiDrawType == null && _mainType != null)
-                    _uiDrawType = _mainType.Assembly.GetTypes().FirstOrDefault(t => t.Name == "UiDraw");
-                if (_uiDrawType == null) return;
-                if (_uiDrawRect == null)
-                    _uiDrawRect = FindMethod(_uiDrawType, "Rect", 8, p =>
-                        p[0].ParameterType == typeof(float) && p[1].ParameterType == typeof(float) &&
-                        p[2].ParameterType == typeof(float) && p[3].ParameterType == typeof(float) &&
-                        p.Skip(4).All(x => x.ParameterType == typeof(int)));
-                if (_uiDrawText == null)
-                    _uiDrawText = FindMethod(_uiDrawType, "Text", 8, p =>
-                        p[0].ParameterType == typeof(string) && p[1].ParameterType == typeof(float) &&
-                        p[2].ParameterType == typeof(float) && p[3].ParameterType == typeof(float) &&
-                        p.Skip(4).All(x => x.ParameterType == typeof(int)));
-                if (_uiDrawRect == null || _uiDrawText == null) return;
-
-                int affinity = Math.Max(0, Math.Min(100, state.Affinity));
-                float headerX = Convert.ToSingle(__args[1], CultureInfo.InvariantCulture);
-                float headerY = Convert.ToSingle(__args[2], CultureInfo.InvariantCulture);
-                // Keep the label and meter on the same header row as SENTIMIENTOS, using the
-                // actual draw coordinates rather than fixed screen coordinates that can overlap history.
-                float x = headerX + 0.155f;
-                float width = 0.225f;
-                _uiDrawText.Invoke(null, new object[] { TF("affinity.meter", affinity), x, headerY, width, 235, 230, 220, 255 });
-                _uiDrawRect.Invoke(null, new object[] { x, headerY + 0.021f, width, 0.0045f, 26, 24, 20, 220 });
-                if (affinity > 0)
-                    _uiDrawRect.Invoke(null, new object[] { x, headerY + 0.021f, width * affinity / 100f, 0.0045f, 189, 153, 83, 245 });
-            }
-            catch (Exception ex) { Log("Affinity meter draw warning: " + Unwrap(ex)); }
-        }
-
         private static CompanionPersistentState GetPersistentState(object record, bool create)
         {
             string id = GetMember(record, "Id") as string;
@@ -863,17 +790,17 @@ namespace EnRAGECompanionsExtension
             SetPersistentFollowState(record, order, ped);
             LastIndividualOrderTaskAt.Remove(id ?? string.Empty);
             try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
+            SetField(companion, "State", 0);
+            SetField(companion, "AskedAt", Game.GameTime);
             if (order == CompanionFollowState.Following)
             {
-                SetField(companion, "State", 0);
-                SetField(companion, "AskedAt", Game.GameTime);
                 InvokeInstance(instance, "ShowSubtitle", TF("order.following", GetMember(record, "Name") as string ?? T("companion.default")));
                 return;
             }
             if (ped.IsOnMount)
                 try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
-            SetField(companion, "State", 1);
-            SetField(companion, "AskedAt", Game.GameTime);
+            CompanionPersistentState waitingState = GetPersistentState(record, false);
+            if (waitingState != null) MaintainAnchoredCompanionTask(id, ped, waitingState);
             InvokeInstance(instance, "ShowSubtitle", TF("order.waiting", GetMember(record, "Name") as string ?? T("companion.default")));
         }
         private static bool MaintainIndividualCompanionOrder(object instance, object companion, Ped player)
@@ -2251,6 +2178,30 @@ namespace EnRAGECompanionsExtension
 
         // While aiming at an active extension companion, expose the individual orders as world
         // prompts. These are deliberately separate from the roster sheet and from Dejar de seguirme.
+        private static bool IsActiveExtensionRecruitTarget(object instance, object record, Ped target)
+        {
+            if (instance == null || record == null || target == null || !target.Exists() ||
+                IsExiledRosterRecord(record) ||
+                !(GetMember(record, "IsAlive") is bool alive) || !alive)
+                return false;
+
+            string id = GetMember(record, "Id") as string;
+            object companion = FindActiveExtensionCompanion(instance, id);
+            if (companion == null) return false;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                GetFieldInt(companion, "State", 2) == 2)
+                return false;
+
+            CompanionPersistentState persistent = GetPersistentState(record, false);
+            if (persistent != null && persistent.FollowState == CompanionFollowState.Dismissed)
+                return false;
+
+            Ped activePed = GetField(companion, "Ped") as Ped;
+            if (activePed == null || !activePed.Exists()) activePed = GetField(companion, "Real") as Ped;
+            return activePed != null && activePed.Exists() && activePed.Handle == target.Handle;
+        }
+
         private static void UpdateIndividualOrderPrompts(object instance, Ped player)
         {
             try
@@ -2264,7 +2215,7 @@ namespace EnRAGECompanionsExtension
                 CachedRosterRecord cached;
                 if (target == null || !target.Exists() || !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) ||
                     cached == null || cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
-                    IsExiledRosterRecord(cached.Record) || !IsRosterRecordCurrentlyFollowing(instance, cached.Record))
+                    !IsActiveExtensionRecruitTarget(instance, cached.Record, target))
                 {
                     HideIndividualOrderPrompts();
                     return;
@@ -4662,24 +4613,12 @@ namespace EnRAGECompanionsExtension
                 oldFirstInjured != state.Injury.FirstInjuredUtcTicks || oldSince != state.Injury.IncapacitatedSinceUtcTicks ||
                 !rosterAlive || presumedDead;
 
-            if (ped.IsDead)
+            if (!ped.IsDead && !wasIncapacitated)
             {
-                int lastAttempt;
-                bool attemptNow = !LastResurrectionAttemptAtById.TryGetValue(id, out lastAttempt) ||
-                    Game.GameTime < lastAttempt || Game.GameTime - lastAttempt >= 1000;
-                if (attemptNow)
-                {
-                    LastResurrectionAttemptAtById[id] = Game.GameTime;
-                    if (TryInvokeNativeWrapper(typeof(PED), "RESURRECT_PED", new object[] { ped.Handle }))
-                    {
-                        try { ped.Health = Math.Max(1, (int)Math.Ceiling(Math.Max(1, ped.MaxHealth) * _incapacitatedHealthPercent / 100.0)); } catch { }
-                        TryInvokeTaskNative("TASK_KNOCKED_OUT", new object[] { ped.Handle, -1.0f, false });
-                    }
-                    else Log("RESURRECT_PED wrapper unavailable; kept roster membership but could not reanimate downed ped " + id + ".");
-                }
-            }
-            else if (!wasIncapacitated)
-            {
+                // Use enRAGE/RDR2's knocked-out task on a living pedestrian. Do not call
+                // RESURRECT_PED here: doing so visibly revives a recruit and can detach the
+                // character from enRAGE's companion lifecycle. Dead peds already recognized by
+                // LooksKnockedOut keep their persistent incapacitated roster state without a revive.
                 TryInvokeTaskNative("TASK_KNOCKED_OUT", new object[] { ped.Handle, -1.0f, false });
             }
 
