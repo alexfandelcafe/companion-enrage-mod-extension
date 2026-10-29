@@ -2464,11 +2464,12 @@ namespace EnRAGECompanionsExtension
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return false;
 
-            // Use RDR2's native incapacitated-revive interaction so the rescuer and the wounded
-            // recruit can play the game's paired recovery animation. Never use RESURRECT_PED:
-            // if the game no longer recognizes the native wound state, a death is final.
-            bool nativeStarted = TryInvokeNativeWrapper(typeof(PED), "_INCAPACITATED_REVIVE",
-                new object[] { ped.Handle, helperPed.Handle });
+            // Invoke the paired native only for enRAGE's actual wounded-down state. For
+            // extension-simulated incapacitation, use a stand-up task instead. Never call
+            // RESURRECT_PED: an ordinary death must not be brought back.
+            bool nativeStarted = nativeWoundedDown &&
+                TryInvokeNativeWrapper(typeof(PED), "_INCAPACITATED_REVIVE",
+                    new object[] { ped.Handle, helperPed.Handle });
             if (!nativeStarted)
             {
                 if (ped.IsDead)
@@ -4913,12 +4914,11 @@ namespace EnRAGECompanionsExtension
                 oldFirstInjured != state.Injury.FirstInjuredUtcTicks || oldSince != state.Injury.IncapacitatedSinceUtcTicks ||
                 !rosterAlive || presumedDead;
 
-            if (!ped.IsDead && !wasIncapacitated)
+            if (!ped.IsDead && !wasIncapacitated && !IsNativeWoundedDown(instance, ped))
             {
-                // Use enRAGE/RDR2's knocked-out task on a living pedestrian. Do not call
-                // RESURRECT_PED here: doing so visibly revives a recruit and can detach the
-                // character from enRAGE's companion lifecycle. Dead peds already recognized by
-                // LooksKnockedOut keep their persistent incapacitated roster state without a revive.
+                // Simulated extension incapacitation needs a knock-out task; when enRAGE has
+                // already classified a real wound, preserve its native wounded-down animation.
+                // Never call RESURRECT_PED here.
                 TryInvokeTaskNative("TASK_KNOCKED_OUT", new object[] { ped.Handle, -1.0f, false });
             }
 
