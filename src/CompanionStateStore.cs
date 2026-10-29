@@ -191,6 +191,14 @@ namespace EnRAGECompanionsExtension
                                 _states[id] = state;
                             }
                         }
+                        if (document.SchemaVersion < CurrentSchemaVersion)
+                        {
+                            // Rewrite older records through the reduced schema on startup. Fields
+                            // not defined by the current model are dropped from the active JSON.
+                            _dirty = true;
+                            Emit("Queued companion state migration from schema " + document.SchemaVersion +
+                                " to schema " + CurrentSchemaVersion + ".");
+                        }
                         Emit("Loaded " + _states.Count + " companion state record(s), schema " + document.SchemaVersion + ".");
                     }
                 }
@@ -222,7 +230,6 @@ namespace EnRAGECompanionsExtension
                 TryRestoreBackupState();
             }
 
-            // Migration is additive: the old file is read but never deleted or rewritten.
         }
 
         private bool TryRestoreBackupState()
