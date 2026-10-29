@@ -55,7 +55,6 @@ AffinityTreatmentGain=3
 EnableIndividualOrders=true
 EnableWaitMode=true
 WaitRadius=8.0
-RestDurationSeconds=60
 EnableInjurySystem=true
 InjuryDamageThresholdPercent=10
 InjuryRecoverySeconds=180
@@ -63,7 +62,6 @@ IncapacitatedHealthPercent=35
 MedicineHealingPercent=100
 MedicineRecoveryReductionSeconds=60
 RecruitMedicineCostCents=100
-RestHealsInjuries=true
 ```
 
 - `MaxCompanions`: total active-companion limit, clamped to 1–7. The extension also checks enRAGE's original story-companion recruitment path against this configured cap.
@@ -73,10 +71,9 @@ RestHealsInjuries=true
 - `EnableAffinity`: displays the companion's affinity meter and enables affinity changes.
 - `AffinityTravelIntervalSeconds`: seconds between travel checks (clamped to 30–7200). Travel gain is awarded when the companion remains nearby and the player has moved at least 100 metres during the interval.
 - `AffinityTravelGain`, `AffinityCombatGain`, `AffinityTreatmentGain`: gains for travel, combat (at most once per 30 seconds of an encounter), and a successful paid treatment. Affinity is clamped to 0–100. The detail sheet also exposes explicit `Mejorar afinidad (+10)` and `Reducir afinidad (-10)` actions for controlled testing.
-- `EnableIndividualOrders`: enables contextual order prompts when aiming at an active extension companion. With default controls the primary order uses the context-no action (F), `Descansar` uses R, incapacitation recovery uses E, and medicine/stance prompts use a separate action. They are not added to the roster sheet and do not intentionally rebind the native G action.
+- `EnableIndividualOrders`: enables contextual order prompts when aiming at an active extension companion. With default controls the primary order uses the context-no action (F), incapacitation recovery uses E, and medicine/stance prompts use a separate action. They are not added to the roster sheet and do not intentionally rebind the native G action.
 - `EnableWaitMode`: controls `Quédate aquí`; when enabled the companion returns to the saved anchor if it exceeds `WaitRadius`, then remains there instead of running enRAGE's default follow task.
-- `WaitRadius`: radius in metres around the saved wait/rest position (clamped to 1–50 m; default 8).
-- `RestDurationSeconds`: timed rest before automatic return to follow mode (clamped to 10–3600 seconds; default 60). A ground-sitting scenario is attempted once; if the installed API lacks the wrapper, it falls back to passive waiting. The timer and resting state are stored by stable roster ID.
+- `WaitRadius`: radius in metres around the saved wait position (clamped to 1–50 m; default 8).
 - `EnableInjurySystem`: enables limited health-delta detection for active recruited companions; it does not infer injury from every animation or visible wound.
 - `InjuryDamageThresholdPercent`: minimum single observed health loss as a percentage of max health required to register an injury (1–50; default 10).
 - `InjuryRecoverySeconds`: injury recovery countdown in seconds (15–86400; default 180), persisted periodically.
@@ -84,7 +81,6 @@ RestHealsInjuries=true
 - `MedicineHealingPercent`: percentage of max health added by a paid treatment (1–100; default 100, capped at max health).
 - `MedicineRecoveryReductionSeconds`: recovery time removed by a treatment (0–86400; default 60).
 - `RecruitMedicineCostCents`: treatment price in cents (0–100000; default 100 = $1.00). A short per-record transaction window guards against duplicate prompt activations.
-- `RestHealsInjuries`: when true, completing `Descansar` clears injury recovery and restores health; when false, it ends the rest without automatic healing.
 - `KeepPlayerSideAfterDismissal`: deprecated. Dismissed extension recruits stay on the player's friendly relationship side regardless of their enRAGE faction.
 
 ## Scope and verification
@@ -143,7 +139,7 @@ La rama `phase2-persistent-companion-state` añade persistencia versionada por I
 - `src/CompanionStateRuntime.cs`: inicializa el almacén al arrancar el script sin introducir una referencia a `NemesisMod.dll`.
 - `src/EntryPoint.cs`: inicializa el almacén al construir el script.
 
-Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Los datos se guardan por ID estable del registro, nunca por el handle temporal del ped. El esquema nuevo es la versión 2 y sigue leyendo el esquema versionado anterior; los campos de funciones retiradas dejan de usarse y no se vuelven a guardar. El formato de desarrollo `{"Version":1,"Records":[...]}` conserva los datos antiguos de orden, postura, montura, posición, lesión, temporizador de descanso y afinidad. Si existe un archivo auxiliar de versiones anteriores, el código nuevo lo ignora y no lo elimina del disco.
+Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Los datos se guardan por ID estable del registro, nunca por el handle temporal del ped. El esquema nuevo es la versión 3 y sigue leyendo el esquema versionado anterior; los campos de funciones retiradas dejan de usarse y no se vuelven a guardar. El formato de desarrollo `{"Version":1,"Records":[...]}` conserva los datos antiguos de orden, postura, montura, posición, lesión, temporizador de descanso y afinidad. Si existe un archivo auxiliar de versiones anteriores, el código nuevo lo ignora y no lo elimina del disco.
 
 ## Fase 3 — órdenes individuales y descanso
 
@@ -151,8 +147,8 @@ La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de su
 
 - `Quédate aquí`: guarda la posición actual del compañero, lo baja del caballo si corresponde y mantiene su IA de espera separada del ciclo `WaitToJoin/Ride`. Si sale del radio configurado, recibe una tarea para regresar al punto guardado.
 - `Sígueme`: elimina el anclaje de espera/descanso, restablece el estado persistente a `Following` y devuelve el control de movimiento al ciclo normal de enRAGE.
-- `Descansar`: mantiene al compañero en la posición guardada durante `RestDurationSeconds`, intenta una escena de sentarse en el suelo (wrappers y nativo directo como fallback) y luego reanuda el seguimiento. La curación depende de `RestHealsInjuries`.
-- Los prompts de órdenes usan controles separados (F para la orden principal y R para descansar en la distribución predeterminada); E queda para ayudar a levantarse cuando está incapacitado. En espera/descanso el wrapper permanece en `State=1`, que enRAGE necesita para conservar el prompt G; el ciclo propio sigue bloqueando la tarea `Ride` que sobrescribiría la orden. No se agregan botones de órdenes a la ficha. La orden se guarda por ID estable, no por handle del ped; `Llamarlo` vuelve a ponerlo en estado `Following`.
+- La orden de descanso se retiró después de un cierre del juego reportado al activarla. La orden `Quédate aquí` sigue disponible.
+- Los prompts de órdenes son contextuales y no se agregan botones a la ficha. En espera el wrapper permanece en `State=1` para conservar el prompt G nativo, y el controlador bloquea la tarea `Ride` que sobrescribiría la orden. La orden se guarda por ID estable; `Llamarlo` vuelve a `Following`.
 - Los registros nuevos y antiguos de la extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE, por lo que no sirve como origen neutral. Los registros con un contador real de muertes no se alteran.
 - La llamada desde la ficha ya no fuerza una tarea de montar al caballo después de `Adopt`; enRAGE conserva el control de sus tareas de aproximación/seguimiento.
 
