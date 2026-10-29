@@ -181,7 +181,7 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 ### Endurecimiento adicional — tratamiento, reincorporación y recuperación del JSON
 
 - El tratamiento pagado ahora comprueba que la salud se haya aplicado realmente al ped vivo. Si no se confirma, intenta devolver el coste usando la firma de incremento de efectivo encontrada en el código decompilado de enRAGE; si la devolución falla, deja un error explícito en el log en lugar de anunciar un tratamiento exitoso.
-- La asistencia a un compañero incapacitado no borra el estado persistente de incapacitación ni lo marca como recuperado hasta verificar que el ped existe, ya no figura como muerto y tiene salud positiva. Si esa comprobación falla, conserva el estado para permitir otro intento.
+- La asistencia no borra la incapacidad persistente mientras el ped siga muerto o en estado nativo de herida. Si el native `_INCAPACITATED_REVIVE` completa la recuperación y el ped queda vivo, erguido y con salud suficiente, el estado persistente se limpia; si la condición nativa de herida desaparece sin recuperación, el seguimiento de muertes permite marcar una muerte confirmada.
 - La carga del estado persistente intenta recuperar `EnRAGECompanionsExtension.companions.json.bak` cuando falta el archivo principal o no puede deserializarse. La copia primaria ilegible se conserva como archivo de cuarentena antes de restaurar el backup, cuando el sistema de archivos lo permite.
 - Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo, el levantamiento y la recuperación tras un JSON corrupto.
 
