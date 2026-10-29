@@ -148,17 +148,17 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 ### Fase 3 — órdenes individuales y espera
 
 - Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` usa F; E se reserva para ayudar a levantarse estando incapacitado. En espera se conserva `State=1` para que el prompt G nativo siga existiendo. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
-- `Quédate aquí` guarda coordenadas por ID estable de roster y evita que el ciclo normal `WaitToJoin/Ride` sobrescriba la tarea de espera. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
+- `Quédate aquí` guarda coordenadas por ID estable de roster, aplica la tarea de anclaje inmediatamente y evita entrar en el estado `Ride` de enRAGE. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
-- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` al INI autogenerado y al ejemplo. La afinidad se dibuja junto al encabezado real `SENTIMIENTOS`, leyendo sus coordenadas dinámicas.
+- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` al INI autogenerado y al ejemplo. Se retiró el medidor de afinidad dibujado por la extensión para no superponerlo a la UI de enRAGE; falta identificar el miembro nativo que alimenta la barra `Hacia ti` antes de conectarle el valor persistente.
 - Los registros de extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE y no es neutral. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
 
 ### Fase 4 — heridas e incapacitación
 
 - El controlador fuerza la vulnerabilidad de los reclutas de la extensión frente al estado invulnerable que asignaba enRAGE al adoptar compañeros; evita además que un recluta de poca salud se quede en el estado `GoingHome` de enRAGE. Las lesiones se registran al superar `InjuryDamageThresholdPercent` de pérdida acumulada desde el baseline de salud. Cada lesión tiene gravedad y tiempo de recuperación por ID estable.
 - La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
-- El estado `IsIncapacitated` es distinto de la muerte confirmada. El controlador consulta también el método de enRAGE `LooksKnockedOut(Ped)` para distinguir una caída/KO de una muerte confirmada; conserva `IsAlive` y `PresumedDead`, y recupera el ped si el wrapper `RESURRECT_PED` está disponible.
+- El estado `IsIncapacitated` es distinto de una muerte confirmada. El controlador consulta `LooksKnockedOut(Ped)` de enRAGE para distinguir una caída/KO; cuando la reconoce, conserva `IsAlive` y `PresumedDead` y no llama a `RESURRECT_PED` automáticamente. La recuperación explícita del jugador mantiene su ruta separada.
 - Al apuntar al compañero incapacitado aparece `Ayudar a levantarse`. La orden restaura salud parcial, prueba `TASK_STAND_UP`, limpia la marca persistente de incapacidad y conserva el miembro en el roster. Si el wrapper no está disponible, puede faltar la animación de levantarse.
 - El remedio usa `RecruitMedicineCostCents`, `MedicineHealingPercent` y `MedicineRecoveryReductionSeconds`. Antes de cobrar valida el objetivo, excluye muertos confirmados y expulsados, y usa un bloqueo temporal por ID para reducir dobles cobros.
 
