@@ -138,7 +138,7 @@ The example is a placeholder: replace `custom_faction_id` with the exact ID of t
 
 La rama `phase2-persistent-companion-state` añade persistencia versionada por ID de registro. No sustituye ni elimina los hooks de reclutamiento existentes.
 
-- `src/CompanionPersistentState.cs`: conserva seguimiento/espera, preferencia de montura, postura de combate, posición guardada, heridas, afinidad, temporizador de descanso y orden del roster.
+- `src/CompanionPersistentState.cs`: conserva seguimiento/espera, preferencia de montura, postura de combate, posición guardada, heridas, afinidad y orden del roster.
 - `src/CompanionStateStore.cs`: carga y guardado JSON versionado, validación de valores, guardado diferido por cambios, archivo temporal, copia de respaldo y recuperación desde el último backup válido.
 - `src/CompanionStateRuntime.cs`: inicializa el almacén al arrancar el script sin introducir una referencia a `NemesisMod.dll`.
 - `src/EntryPoint.cs`: inicializa el almacén al construir el script.
