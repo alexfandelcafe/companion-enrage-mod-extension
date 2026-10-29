@@ -139,17 +139,16 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 ## Fase 2 — persistencia y migración
 
 - Añadidos modelos persistentes independientes del handle del ped.
-- Añadido `EnRAGECompanionsExtension.companions.json`, esquema versionado (versión 3), normalización de enums, afinidad, posición, lesión, temporizador de descanso y preferencia de montura/postura.
+- Añadido `EnRAGECompanionsExtension.companions.json`, esquema versionado (versión 3), normalización de enums, afinidad, posición, lesión y preferencia de montura/postura.
 - La escritura se realiza mediante archivo temporal y sustitución con copia de respaldo cuando la plataforma lo permite; si falla la operación principal, se intenta una sustitución alternativa.
 - Si falta el JSON principal o no se puede leer, el almacén intenta restaurar el backup `.bak`; el archivo ilegible se conserva en cuarentena cuando el sistema de archivos lo permite.
-- El esquema anterior se sigue leyendo para conservar afinidad, postura, montura, posición, lesión y temporizador de descanso. Los campos retirados no se importan ni se vuelven a guardar; los archivos auxiliares de versiones anteriores se ignoran.
+- El esquema anterior se sigue leyendo para conservar afinidad, postura, montura, posición y lesión. Los estados antiguos `Resting` se normalizan a seguimiento; el temporizador de descanso se ignora. Los campos retirados no se vuelven a guardar y los archivos auxiliares de versiones anteriores se ignoran.
 - El almacén se inicializa desde `EntryPoint`; el guardado de migración se realiza solo si hay cambios.
 
-### Fase 3 — órdenes individuales y descanso
+### Fase 3 — órdenes individuales y espera
 
-- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` usa F; E se reserva para ayudar a levantarse estando incapacitado. En espera se conserva `State=1` para que el prompt G nativo siga existiendo. La orden de descanso se retiró después de un cierre del juego reportado al activarla.
+- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` usa F; E se reserva para ayudar a levantarse estando incapacitado. En espera se conserva `State=1` para que el prompt G nativo siga existiendo. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
 - `Quédate aquí` guarda coordenadas por ID estable de roster y evita que el ciclo normal `WaitToJoin/Ride` sobrescriba la tarea de espera. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
-- La orden de descanso se retiró tras un cierre del juego reportado por el usuario. `Quédate aquí` sigue siendo la orden disponible para dejar al compañero esperando.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
 - Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` al INI autogenerado y al ejemplo. La afinidad se dibuja junto al encabezado real `SENTIMIENTOS`, leyendo sus coordenadas dinámicas.
@@ -157,7 +156,7 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 
 ### Fase 4 — heridas e incapacitación
 
-- El controlador muestrea la salud de compañeros activos y registra lesiones si la pérdida puntual alcanza `InjuryDamageThresholdPercent`. Cada lesión tiene una gravedad y un tiempo de recuperación por ID estable.
+- El controlador fuerza la vulnerabilidad de los reclutas de la extensión frente al estado invulnerable que asignaba enRAGE al adoptar compañeros; evita además que un recluta de poca salud se quede en el estado `GoingHome` de enRAGE. Las lesiones se registran al superar `InjuryDamageThresholdPercent` de pérdida acumulada desde el baseline de salud. Cada lesión tiene gravedad y tiempo de recuperación por ID estable.
 - La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
 - El estado `IsIncapacitated` es distinto de la muerte confirmada. El controlador consulta también el método de enRAGE `LooksKnockedOut(Ped)` para distinguir una caída/KO de una muerte confirmada; conserva `IsAlive` y `PresumedDead`, y recupera el ped si el wrapper `RESURRECT_PED` está disponible.
 - Al apuntar al compañero incapacitado aparece `Ayudar a levantarse`. La orden restaura salud parcial, prueba `TASK_STAND_UP`, limpia la marca persistente de incapacidad y conserva el miembro en el roster. Si el wrapper no está disponible, puede faltar la animación de levantarse.
@@ -166,6 +165,12 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 ### Fase 5 — posturas de combate
 
 - El prompt de postura aparece al apuntar a un compañero activo solo cuando la detección encuentra un ped que está atacando al jugador. `Fuego a mi señal` requiere disparo del jugador en el momento actual o dentro de una ventana de 2,5 segundos.
+
+### Textos y traducciones de la extensión
+
+- En el primer arranque se genera `scripts/EnRAGECompanionsExtension.texts.ini`. Los valores se pueden traducir sin recompilar el código: conserva cada clave a la izquierda de `=` y cambia el texto a la derecha.
+- Los mensajes con formato usan marcadores como `{0}`, `{1}` y `${0}`; no los borres ni los renombres. Las claves nuevas se agregan al archivo existente y el catálogo se recarga al iniciar el script.
+- `EnRAGECompanionsExtension.texts.ini.example` contiene la plantilla inicial con las claves de la extensión.
 
 
 ### Pendiente y verificación
@@ -181,4 +186,4 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 - Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo, el levantamiento y la recuperación tras un JSON corrupto.
 
 
-- **Limitación pendiente de detección de daño:** el controlador de lesiones actual compara la salud entre muestras y aplica un umbral. No clasifica de forma exhaustiva el origen de cada impacto (jugador, NPC hostil, caída o entorno), ni prueba que varios descensos cercanos siempre correspondan a impactos distintos. Ese criterio de aceptación sigue parcialmente pendiente hasta verificar una API fiable de atribución del daño en la versión objetivo.
+- **Limitación pendiente de detección de daño:** el controlador utiliza un baseline acumulado de salud y un umbral configurable, pero no atribuye exhaustivamente cada pérdida al jugador, a un NPC hostil, a una caída o al entorno. Esta distinción requiere una API de atribución de daño fiable y una prueba dentro de la versión objetivo.
