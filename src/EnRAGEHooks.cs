@@ -2371,6 +2371,15 @@ namespace EnRAGECompanionsExtension
                 }
 
                 CompanionPersistentState state = GetPersistentState(cached.Record, true);
+                string targetId = GetMember(cached.Record, "Id") as string;
+                int recoveryUntil;
+                if (!string.IsNullOrWhiteSpace(targetId) &&
+                    RecoveryAnimationUntilById.TryGetValue(targetId, out recoveryUntil) &&
+                    Game.GameTime < recoveryUntil)
+                {
+                    HideIncapacitatedPrompt();
+                    return;
+                }
                 bool down = IsNativeWoundedDown(instance, target) ||
                     (state != null && state.Injury != null && state.Injury.IsIncapacitated && !target.IsDead);
                 if (!down)
