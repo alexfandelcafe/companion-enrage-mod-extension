@@ -14,12 +14,10 @@ namespace EnRAGECompanionsExtension
     /// </summary>
     public sealed class CompanionStateStore
     {
-        public const int CurrentSchemaVersion = 1;
+        public const int CurrentSchemaVersion = 2;
         public const string StateFileName = "EnRAGECompanionsExtension.companions.json";
-        public const string LegacyOutfitFileName = "EnRAGECompanionsExtension.outfits.txt";
 
         private readonly string _statePath;
-        private readonly string _legacyOutfitPath;
         private readonly Dictionary<string, CompanionPersistentState> _states =
             new Dictionary<string, CompanionPersistentState>(StringComparer.Ordinal);
         private bool _dirty;
@@ -34,7 +32,6 @@ namespace EnRAGECompanionsExtension
             if (diagnostic != null) Diagnostic += diagnostic;
             Directory.CreateDirectory(scriptsDirectory);
             _statePath = Path.Combine(scriptsDirectory, StateFileName);
-            _legacyOutfitPath = Path.Combine(scriptsDirectory, LegacyOutfitFileName);
             Load();
         }
 
@@ -226,7 +223,6 @@ namespace EnRAGECompanionsExtension
             }
 
             // Migration is additive: the old file is read but never deleted or rewritten.
-            ImportLegacyOutfits();
         }
 
         private bool TryRestoreBackupState()
@@ -339,22 +335,6 @@ namespace EnRAGECompanionsExtension
                     state.RestStartedUtcTicks = old.RestStartedUtcTicks;
                     state.Affinity = old.Affinity;
 
-                    if (state.Appearance == null)
-                        state.Appearance = new CompanionAppearanceState();
-                    if (old.MetaOutfitHash != 0U)
-                    {
-                        state.Appearance.HasLegacyOutfitHash = true;
-                        state.Appearance.LegacyOutfitHash = old.MetaOutfitHash;
-                    }
-                    if (old.ClothingComponents != null && old.ClothingComponents.Count > 0)
-                        state.Appearance.ClothingComponents = old.ClothingComponents;
-                    if (old.HatComponentHash != 0U)
-                        state.Appearance.HatComponentHash = old.HatComponentHash;
-                    if (old.LongGunHash != 0U && !state.Appearance.WeaponHashes.Contains(old.LongGunHash))
-                        state.Appearance.WeaponHashes.Add(old.LongGunHash);
-                    if (old.SidearmHash != 0U && !state.Appearance.WeaponHashes.Contains(old.SidearmHash))
-                        state.Appearance.WeaponHashes.Add(old.SidearmHash);
-
                     state.Normalize(id);
                     _states[id] = state;
                 }
@@ -367,46 +347,6 @@ namespace EnRAGECompanionsExtension
             {
                 Emit("Legacy companion state migration failed: " + ex.Message);
                 return false;
-            }
-        }
-
-        private void ImportLegacyOutfits()
-        {
-            if (!File.Exists(_legacyOutfitPath)) return;
-
-            int imported = 0;
-            try
-            {
-                foreach (string line in File.ReadAllLines(_legacyOutfitPath))
-                {
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    int separator = line.IndexOf('|');
-                    if (separator <= 0 || separator == line.Length - 1) continue;
-
-                    string id = NormalizeId(line.Substring(0, separator));
-                    string hashText = line.Substring(separator + 1).Trim();
-                    uint hash;
-                    if (id.Length == 0 || !uint.TryParse(hashText,
-                        System.Globalization.NumberStyles.HexNumber,
-                        System.Globalization.CultureInfo.InvariantCulture, out hash) || hash == 0U)
-                        continue;
-
-                    CompanionPersistentState state = GetOrCreate(id);
-                    if (!state.Appearance.HasLegacyOutfitHash)
-                    {
-                        state.Appearance.HasLegacyOutfitHash = true;
-                        state.Appearance.LegacyOutfitHash = hash;
-                        state.Normalize(id);
-                        _dirty = true;
-                        imported++;
-                    }
-                }
-                if (imported > 0)
-                    Emit("Imported " + imported + " legacy outfit hash record(s); original file retained.");
-            }
-            catch (Exception ex)
-            {
-                Emit("Could not import legacy outfit file: " + ex.Message);
             }
         }
 
@@ -474,11 +414,6 @@ namespace EnRAGECompanionsExtension
         [System.Runtime.Serialization.DataMember] public long InjuryStartedUtcTicks { get; set; }
         [System.Runtime.Serialization.DataMember] public long RestStartedUtcTicks { get; set; }
         [System.Runtime.Serialization.DataMember] public int Affinity { get; set; }
-        [System.Runtime.Serialization.DataMember] public uint MetaOutfitHash { get; set; }
-        [System.Runtime.Serialization.DataMember] public List<CompanionClothingComponent> ClothingComponents { get; set; }
-        [System.Runtime.Serialization.DataMember] public uint HatComponentHash { get; set; }
-        [System.Runtime.Serialization.DataMember] public uint LongGunHash { get; set; }
-        [System.Runtime.Serialization.DataMember] public uint SidearmHash { get; set; }
     }
 
     [System.Runtime.Serialization.DataContract]
