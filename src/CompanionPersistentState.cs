@@ -18,8 +18,6 @@ namespace EnRAGECompanionsExtension
         [DataMember(Order = 6)] public CompanionInjuryState Injury { get; set; }
         [DataMember(Order = 7)] public int Affinity { get; set; }
         [DataMember(Order = 9)] public long LastUpdatedUtcTicks { get; set; }
-        // Kept separately from FollowState so a resting companion can resume/expire the rest timer.
-        [DataMember(Order = 10)] public long RestStartedUtcTicks { get; set; }
         [DataMember(Order = 11)] public int RosterOrder { get; set; }
 
         public CompanionPersistentState()
@@ -32,14 +30,14 @@ namespace EnRAGECompanionsExtension
             Injury = new CompanionInjuryState();
             Affinity = 50;
             LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
-            RestStartedUtcTicks = 0;
             RosterOrder = -1;
         }
 
         public void Normalize(string recordId)
         {
             RecordId = (recordId ?? RecordId ?? string.Empty).Trim();
-            if (!Enum.IsDefined(typeof(CompanionFollowState), FollowState))
+            if (!Enum.IsDefined(typeof(CompanionFollowState), FollowState) ||
+                FollowState == CompanionFollowState.Resting)
                 FollowState = CompanionFollowState.Following;
             if (!Enum.IsDefined(typeof(CompanionMountPreference), MountPreference))
                 MountPreference = CompanionMountPreference.Automatic;
@@ -53,8 +51,6 @@ namespace EnRAGECompanionsExtension
             Affinity = Clamp(Affinity, 0, 100);
             if (LastUpdatedUtcTicks < 0 || LastUpdatedUtcTicks > DateTime.MaxValue.Ticks)
                 LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
-            if (RestStartedUtcTicks < 0 || RestStartedUtcTicks > DateTime.MaxValue.Ticks)
-                RestStartedUtcTicks = 0;
             if (RosterOrder < -1) RosterOrder = -1;
             if (RosterOrder > 10000) RosterOrder = 10000;
         }
