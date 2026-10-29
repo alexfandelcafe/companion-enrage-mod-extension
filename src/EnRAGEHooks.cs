@@ -4405,14 +4405,20 @@ namespace EnRAGECompanionsExtension
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             if (ped == null || !ped.Exists() || ped.IsDead) return;
 
-            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
             int state = GetFieldInt(companion, "State", -1), health = 0, maxHealth = 1;
             try { health = ped.Health; } catch { }
             try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
             CompanionPersistentState persistent = GetPersistentState(GetField(companion, "Rec"), false);
             bool isPersistentlyIncapacitated = persistent != null && persistent.Injury != null &&
                 persistent.Injury.IsIncapacitated;
-            if (!isPersistentlyIncapacitated && state == 2 && health > 0 &&
+            if (isPersistentlyIncapacitated)
+            {
+                // Keep an incapacitated but still-living ped from taking a lethal follow-up hit.
+                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
+                return;
+            }
+            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+            if (state == 2 && health > 0 &&
                 health < (int)Math.Ceiling(maxHealth * 0.30))
             {
                 try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
@@ -4457,14 +4463,6 @@ namespace EnRAGECompanionsExtension
             // enRAGE's Adopt marks real companions invincible. Re-enable damage before sampling.
             try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); }
             catch (Exception ex) { Log("Could not restore recruit damageability: " + Unwrap(ex)); }
-            if (state.Injury.IsIncapacitated)
-            {
-                // Keep a living downed recruit protected from further hits until explicitly helped.
-                // If the game already registered a true death, do not resurrect it automatically.
-                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
-                return true;
-            }
-            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
             int now = Game.GameTime, health = 0, maxHealth = 1;
             try { health = ped.Health; } catch { }
             try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { maxHealth = 1; }
