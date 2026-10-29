@@ -213,6 +213,8 @@ namespace EnRAGECompanionsExtension
                 MethodInfo updateCompanion = FindMethod(_mainType, "UpdateCompanion", 1, p => IsPedType(p[0].ParameterType));
                 MethodInfo ask = FindMethod(_mainType, "Ask", 3, p => IsPedType(p[0].ParameterType) && p[1].ParameterType == typeof(string) && IsPedType(p[2].ParameterType));
                 MethodInfo spawnCompanion = FindMethod(_mainType, "SpawnCompanion", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
+                MethodInfo waitToJoin = FindMethod(_mainType, "WaitToJoin", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
+                MethodInfo ride = FindMethod(_mainType, "Ride", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
                 MethodInfo cleanup = FindMethod(_mainType, "Cleanup", 1, p => p[0].ParameterType.Name == "Companion");
                 MethodInfo restoreReal = FindMethod(_mainType, "RestoreReal", 1, p => p[0].ParameterType.Name == "Companion");
 
@@ -269,6 +271,10 @@ namespace EnRAGECompanionsExtension
                 if (_whoIs != null)
                     _harmony.Patch(_whoIs, postfix: Hook(nameof(WhoIsPostfix)));
                 _harmony.Patch(spawnCompanion, prefix: Hook(nameof(SpawnCompanionPrefix)));
+                // Waiting/incapacitated extension recruits must not have enRAGE's stock movement
+                // methods overwrite the order task after UpdateCompanion runs.
+                if (waitToJoin != null) _harmony.Patch(waitToJoin, prefix: Hook(nameof(CompanionMovementOrderPrefix)));
+                if (ride != null) _harmony.Patch(ride, prefix: Hook(nameof(CompanionMovementOrderPrefix)));
                 // enRAGE's stock CompanionFight attacks every hated target around the player once
                 // any nearby combat starts. Extension recruits use a strict retaliatory policy.
                 _harmony.Patch(_companionFight, prefix: Hook(nameof(CompanionFightPrefix)));
@@ -432,6 +438,28 @@ namespace EnRAGECompanionsExtension
             _latestMainInstance = __instance;
             SetField(__instance, "_companionsOffDone", true);
         }
+
+        private static bool CompanionMovementOrderPrefix(object __instance, object[] __args)
+        {
+            try
+            {
+                if (__args == null || __args.Length == 0) return true;
+                object companion = __args[0];
+                string key = GetField(companion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                    return true;
+
+                object record = GetField(companion, "Rec");
+                CompanionPersistentState state = GetPersistentState(record, false);
+                if (state == null) return true;
+                if (state.FollowState == CompanionFollowState.Waiting ||
+                    (state.Injury != null && state.Injury.IsIncapacitated))
+                    return false;
+            }
+            catch (Exception ex) { Log("Companion movement order guard warning: " + Unwrap(ex)); }
+            return true;
+        }
+
         private static void CompanionCyclePostfix(object __instance, object[] __args)
         {
             try
@@ -784,7 +812,7 @@ namespace EnRAGECompanionsExtension
             SetPersistentFollowState(record, order, ped);
             LastIndividualOrderTaskAt.Remove(id ?? string.Empty);
             try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
-            SetField(companion, "State", 0);
+            SetField(companion, "State", order == CompanionFollowState.Waiting ? 1 : 0);
             SetField(companion, "AskedAt", Game.GameTime);
             if (order == CompanionFollowState.Following)
             {
@@ -936,7 +964,15 @@ namespace EnRAGECompanionsExtension
             if (state == null) return -1;
             state.Affinity = Math.Max(0, Math.Min(100, state.Affinity + delta));
             SavePersistentState(state);
+            SyncNativeAffinityScore(record, state);
             return state.Affinity;
+        }
+
+        private static bool SyncNativeAffinityScore(object record, CompanionPersistentState state = null)
+        {
+            if (record == null || !IsRecruitedRosterRecord(record)) return false;
+            if (state == null) state = GetPersistentState(record, true);
+            return state != null && SetNumericMember(record, "Like", state.Affinity);
         }
 
         private static void AwardAffinity(object record, int gain, string reason)
@@ -1023,7 +1059,6 @@ namespace EnRAGECompanionsExtension
 
                 string call = T("action.call"), kick = T("action.kick");
                 string confirm = T("action.kick.confirm"), cancel = T("action.kick.cancel");
-                string affinityUp = T("action.affinity.increase"), affinityDown = T("action.affinity.decrease");
                 if (ExiledRosterIds.Contains(id))
                 {
                     __result.Remove("Llamarlo"); __result.Remove(call);
@@ -1038,16 +1073,13 @@ namespace EnRAGECompanionsExtension
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
                 if (recruitedRecord)
                 {
+                    // Affinity is shown through enRAGE's native roster relationship score;
+                    // do not add a second, extension-owned affinity UI to the detail actions.
                     __result.RemoveAll(action => action != null &&
                         (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)" ||
-                         action == affinityUp || action == affinityDown ||
                          action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0 ||
                          action.IndexOf("affinity", StringComparison.OrdinalIgnoreCase) >= 0));
-                    if (_enableAffinity)
-                    {
-                        InsertBeforeBack(__result, affinityUp);
-                        InsertBeforeBack(__result, affinityDown);
-                    }
+                    SyncNativeAffinityScore(record);
                     __result.Remove("Llamarlo"); __result.Remove(call);
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
                         InsertBeforeBack(__result, call);
@@ -1140,11 +1172,6 @@ namespace EnRAGECompanionsExtension
                         return false;
                     }
                     CallRecruitedRosterMember(_latestMainInstance, __instance, record);
-                    return false;
-                }
-                if (action == T("action.affinity.increase") || action == T("action.affinity.decrease"))
-                {
-                    AdjustAffinityFromRoster(_latestMainInstance, record, action == T("action.affinity.increase") ? 10 : -10);
                     return false;
                 }
                 if (ExiledRosterIds.Contains(recordIdForConfirmation))
@@ -1559,6 +1586,11 @@ namespace EnRAGECompanionsExtension
                 (inStoryRoster ? "vdl" : _recruitGangId);
 
             ExiledRosterIds.Add(id);
+            HideIndividualOrderPrompts();
+            HideIncapacitatedPrompt();
+            HideRecruitMedicinePrompt();
+            HideCombatStancePrompt();
+            SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
             SavePersistentIdSet("EnRAGECompanionsExtension.exiled-roster.txt", ExiledRosterIds);
 
             try
@@ -1911,7 +1943,9 @@ namespace EnRAGECompanionsExtension
 
             bool changed = SetNumericMember(record, "Hate", 0);
             changed |= SetNumericMember(record, "Fear", 0);
-            changed |= SetNumericMember(record, "Like", 100); // Optional on builds whose record type exposes a like score.
+            // enRAGE's native roster "towards you" meter uses the record's Like score on builds
+            // that expose it. Keep that score synchronized with persistent extension affinity.
+            changed |= SyncNativeAffinityScore(record);
             changed |= SetEnumMember(record, "Disposition", "Friendly");
             return changed;
         }
@@ -2960,6 +2994,17 @@ namespace EnRAGECompanionsExtension
             if (key == null || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
                 return true;
 
+            object record = GetField(companion, "Rec");
+            CompanionPersistentState savedState = GetPersistentState(record, false);
+            if (savedState != null && savedState.Injury != null && savedState.Injury.IsIncapacitated)
+            {
+                // An incapacitated recruit keeps the same roster identity. Do not let enRAGE's
+                // missing/dead-ped recovery path spawn a fresh body and detach it from the band.
+                SetField(companion, "State", 0);
+                __result = false;
+                return false;
+            }
+
             Ped player = __args[1] as Ped;
             uint modelHash;
             if (player == null || !player.Exists() || !ModelHashes.TryGetValue(key, out modelHash))
@@ -3924,8 +3969,10 @@ namespace EnRAGECompanionsExtension
 
                     // In RDR2 a ped can report IsDead while still in the incapacitated state.
                     // Try the recovery path before mutating the roster's IsAlive flag.
-                    if (IsLikelyIncapacitated(cached.Record, ped, id))
+                    if (IsLikelyIncapacitated(cached.Record, ped, id) || ped.IsDead)
                     {
+                        // A recruited companion's death is a recoverable roster incapacitation.
+                        // Never mark the record dead here: enRAGE would then replace the ped.
                         SetMember(cached.Record, "IsAlive", true);
                         SetMember(cached.Record, "PresumedDead", false);
                         TryEnterIncapacitated(instance, cached.Record, ped);
@@ -4398,12 +4445,26 @@ namespace EnRAGECompanionsExtension
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             if (ped == null || !ped.Exists()) return false;
 
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null || state.Injury == null) return false;
+            if (state.Injury.IsIncapacitated)
+            {
+                // Do not undo the protection installed for a downed recruit.
+                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
+                return true;
+            }
+
             // enRAGE's Adopt marks real companions invincible. Re-enable damage before sampling.
             try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); }
             catch (Exception ex) { Log("Could not restore recruit damageability: " + Unwrap(ex)); }
-
-            CompanionPersistentState state = GetPersistentState(record, true);
-            if (state == null || state.Injury == null) return false;
+            if (state.Injury.IsIncapacitated)
+            {
+                // Keep a living downed recruit protected from further hits until explicitly helped.
+                // If the game already registered a true death, do not resurrect it automatically.
+                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
+                return true;
+            }
+            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
             int now = Game.GameTime, health = 0, maxHealth = 1;
             try { health = ped.Health; } catch { }
             try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { maxHealth = 1; }
@@ -4546,10 +4607,7 @@ namespace EnRAGECompanionsExtension
             }
             CompanionPersistentState state = GetPersistentState(record, false);
             if (state != null && state.Injury != null && state.Injury.IsIncapacitated && ped.IsDead)
-            {
-                long since = state.Injury.IncapacitatedSinceUtcTicks;
-                if (since == 0 || DateTime.UtcNow.Ticks - since < TimeSpan.FromMinutes(1).Ticks) return true;
-            }
+                return true;
             if (ped.IsDead)
             {
                 try { if (TryStaticBool("LooksKnockedOut", ped)) return true; } catch { }
@@ -4644,7 +4702,7 @@ namespace EnRAGECompanionsExtension
                 if (ped == null || !ped.Exists() || !ped.IsDead)
                     return;
                 string recordId = GetMember(record, "Id") as string;
-                if (IsLikelyIncapacitated(record, ped, recordId))
+                if (IsLikelyIncapacitated(record, ped, recordId) || ped.IsDead)
                 {
                     TryEnterIncapacitated(instance, record, ped);
                     return;
