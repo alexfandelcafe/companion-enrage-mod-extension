@@ -147,7 +147,7 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 
 ### Fase 3 — órdenes individuales y espera
 
-- Las órdenes individuales aparecen como prompts contextuales al apuntar al compañero activo, no en la ficha. `Quédate aquí`/`Sígueme` usa F; E se reserva para ayudar a levantarse estando incapacitado. En espera se conserva `State=1` para que el prompt G nativo siga existiendo. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
+- Las órdenes individuales aparecen como prompts contextuales solo al apuntar al ped exacto de un recluta activo y no expulsado. `Quédate aquí`/`Sígueme` usa F; E se reserva para ayudar a levantarse estando incapacitado. La orden de espera ya no fuerza `State=1` (que podía entrar en la rutina `Ride`); aplica la tarea de anclaje de inmediato. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
 - `Quédate aquí` guarda coordenadas por ID estable de roster, aplica la tarea de anclaje inmediatamente y evita entrar en el estado `Ride` de enRAGE. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
