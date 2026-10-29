@@ -2664,6 +2664,8 @@ namespace EnRAGECompanionsExtension
                 {
                     AutoAssistTargetByHelperId[selectedHelperId] = id;
                     LastAutoAssistMoveAtByHelperId.Remove(selectedHelperId);
+                    // If the helper is interrupted/cannot path, retry with another active recruit soon.
+                    LastAutoAssistAtById[id] = now + 2500;
                     Log("Recruit " + selectedHelperId + " is approaching injured companion " + id + ".");
                 }
             }
