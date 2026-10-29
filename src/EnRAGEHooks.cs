@@ -32,6 +32,7 @@ namespace EnRAGECompanionsExtension
         private static MethodInfo _updateSocial;
         private static MethodInfo _socialTarget;
         private static MethodInfo _recordAt;
+        private static MethodInfo _regardOfRecord;
         private static MethodInfo _roleOf;
         private static MethodInfo _whoIs;
         private static MethodInfo _makePrompt;
@@ -193,6 +194,8 @@ namespace EnRAGECompanionsExtension
                 _updateSocial = FindMethod(_mainType, "UpdateSocial", 1, p => IsPedType(p[0].ParameterType));
                 _socialTarget = FindMethod(_mainType, "SocialTarget", 1, p => IsPedType(p[0].ParameterType));
                 _recordAt = FindMethod(_mainType, "RecordAt", 1, p => p[0].ParameterType == typeof(int));
+                _regardOfRecord = FindMethod(_mainType, "RegardOfRecord", 1,
+                    p => p[0].ParameterType.Name == "NemesisRecord" && p[0].ParameterType.FullName == "NemesisSystem.NemesisRecord");
                 _roleOf = FindMethod(_mainType, "RoleOf", 1, p => p[0].ParameterType == typeof(int));
                 _whoIs = FindMethod(_mainType, "WhoIs", 1, p => p[0].ParameterType == typeof(int));
                 _makePrompt = FindMethod(_mainType, "MakePrompt", 4, p =>
@@ -281,6 +284,8 @@ namespace EnRAGECompanionsExtension
 
                 if (_recordAt != null)
                     _harmony.Patch(_recordAt, postfix: Hook(nameof(RecordAtPostfix)));
+                if (_regardOfRecord != null)
+                    _harmony.Patch(_regardOfRecord, postfix: Hook(nameof(RegardOfRecordPostfix)));
 
                 if (cleanup != null)
                     _harmony.Patch(cleanup, postfix: Hook(nameof(CleanupPostfix)));
@@ -964,15 +969,22 @@ namespace EnRAGECompanionsExtension
             if (state == null) return -1;
             state.Affinity = Math.Max(0, Math.Min(100, state.Affinity + delta));
             SavePersistentState(state);
-            SyncNativeAffinityScore(record, state);
             return state.Affinity;
         }
 
-        private static bool SyncNativeAffinityScore(object record, CompanionPersistentState state = null)
+        private static void RegardOfRecordPostfix(object __0, ref int __result)
         {
-            if (record == null || !IsRecruitedRosterRecord(record)) return false;
-            if (state == null) state = GetPersistentState(record, true);
-            return state != null && SetNumericMember(record, "Like", state.Affinity);
+            try
+            {
+                // enRAGE's native story relationship display calls RegardOfRecord(NemesisRecord).
+                // Its stock implementation only recognizes vdl_ IDs, so extension recruits need
+                // their persistent 0-100 affinity mapped to the native -100..100 regard scale.
+                if (!IsRecruitedRosterRecord(__0)) return;
+                CompanionPersistentState state = GetPersistentState(__0, true);
+                if (state == null) return;
+                __result = Math.Max(-100, Math.Min(100, state.Affinity * 2 - 100));
+            }
+            catch (Exception ex) { Log("Native story regard meter sync warning: " + Unwrap(ex)); }
         }
 
         private static void AwardAffinity(object record, int gain, string reason)
@@ -1073,13 +1085,12 @@ namespace EnRAGECompanionsExtension
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
                 if (recruitedRecord)
                 {
-                    // Affinity is shown through enRAGE's native roster relationship score;
+                    // Affinity is shown through enRAGE's native RegardOfRecord relationship meter;
                     // do not add a second, extension-owned affinity UI to the detail actions.
                     __result.RemoveAll(action => action != null &&
                         (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)" ||
                          action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0 ||
                          action.IndexOf("affinity", StringComparison.OrdinalIgnoreCase) >= 0));
-                    SyncNativeAffinityScore(record);
                     __result.Remove("Llamarlo"); __result.Remove(call);
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
                         InsertBeforeBack(__result, call);
@@ -1943,9 +1954,6 @@ namespace EnRAGECompanionsExtension
 
             bool changed = SetNumericMember(record, "Hate", 0);
             changed |= SetNumericMember(record, "Fear", 0);
-            // enRAGE's native roster "towards you" meter uses the record's Like score on builds
-            // that expose it. Keep that score synchronized with persistent extension affinity.
-            changed |= SyncNativeAffinityScore(record);
             changed |= SetEnumMember(record, "Disposition", "Friendly");
             return changed;
         }
