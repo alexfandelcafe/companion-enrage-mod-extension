@@ -1085,7 +1085,7 @@ namespace EnRAGECompanionsExtension
                 string confirm = T("action.kick.confirm"), cancel = T("action.kick.cancel");
                 if (IsRosterRecordIncapacitated(record))
                 {
-                    __result.RemoveAll(action => action != null && action != "Atrás" && action != "Back" && action != "Volver");
+                    __result.RemoveAll(action => action != null && action != "Atrás" && action != "Back" && action != "Volver" && action != "Cerrar" && action != "Close");
                     if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
                         string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                         _pendingKickRosterRecordId = null;
@@ -1183,7 +1183,9 @@ namespace EnRAGECompanionsExtension
                 if (actions == null || selected < 0 || selected >= actions.Count) return true;
                 string action = actions[selected];
                 string recordIdForConfirmation = GetMember(record, "Id") as string;
-                if (IsRosterRecordIncapacitated(record))
+                bool navigationAction = action == "Atrás" || action == "Back" || action == "Volver" ||
+                    action == "Cerrar" || action == "Close";
+                if (IsRosterRecordIncapacitated(record) && !navigationAction)
                 {
                     _pendingKickRosterRecordId = null;
                     InvokeInstance(_latestMainInstance, "ShowSubtitle", T("incapacitated.only_help"));
