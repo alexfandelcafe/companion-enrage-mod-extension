@@ -4417,7 +4417,11 @@ namespace EnRAGECompanionsExtension
             int state = GetFieldInt(companion, "State", -1), health = 0, maxHealth = 1;
             try { health = ped.Health; } catch { }
             try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
-            if (state == 2 && health > 0 && health < (int)Math.Ceiling(maxHealth * 0.30))
+            CompanionPersistentState persistent = GetPersistentState(GetField(companion, "Rec"), false);
+            bool isPersistentlyIncapacitated = persistent != null && persistent.Injury != null &&
+                persistent.Injury.IsIncapacitated;
+            if (!isPersistentlyIncapacitated && state == 2 && health > 0 &&
+                health < (int)Math.Ceiling(maxHealth * 0.30))
             {
                 try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
                 try
@@ -4479,7 +4483,11 @@ namespace EnRAGECompanionsExtension
 
             if (state.Injury.IsIncapacitated)
             {
-                if (!ped.IsDead && !ped.IsIncapacitated && !ped.IsRagdoll)
+                // Some API builds do not report IsRagdoll/IsIncapacitated while TASK_KNOCKED_OUT
+                // is starting. Do not clear the persistent down state until the ped has recovered
+                // at least the configured assistance health, or the player's help handler clears it.
+                int recoveredHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
+                if (!ped.IsDead && !ped.IsIncapacitated && !ped.IsRagdoll && health >= recoveredHealth)
                 {
                     state.Injury.IsIncapacitated = false;
                     state.Injury.IncapacitatedSinceUtcTicks = 0;
