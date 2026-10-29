@@ -125,6 +125,10 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastAutoAssistAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, string> AutoAssistTargetByHelperId =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastAutoAssistMoveAtByHelperId =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> RecoveryAnimationUntilById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastPlayerWeaponFireAt = -100000;
@@ -2609,12 +2613,15 @@ namespace EnRAGECompanionsExtension
 
                 string id = GetMember(record, "Id") as string;
                 if (string.IsNullOrWhiteSpace(id)) continue;
+                if (AutoAssistTargetByHelperId.Values.Any(targetId =>
+                    string.Equals(targetId, id, StringComparison.OrdinalIgnoreCase)))
+                    continue;
                 int nextAllowed;
                 if (LastAutoAssistAtById.TryGetValue(id, out nextAllowed) && now < nextAllowed) continue;
 
                 object bestHelper = null;
                 Ped bestHelperPed = null;
-                float bestDistance = 2.35f;
+                float bestDistance = 12.0f;
                 foreach (object candidate in companions)
                 {
                     if (object.ReferenceEquals(candidate, downedCompanion)) continue;
@@ -2623,7 +2630,9 @@ namespace EnRAGECompanionsExtension
                         GetFieldInt(candidate, "State", 2) == 2)
                         continue;
                     object helperRecord = GetField(candidate, "Rec");
-                    if (helperRecord == null || IsExiledRosterRecord(helperRecord) ||
+                    string helperId = GetMember(helperRecord, "Id") as string;
+                    if (string.IsNullOrWhiteSpace(helperId) || AutoAssistTargetByHelperId.ContainsKey(helperId) ||
+                        helperRecord == null || IsExiledRosterRecord(helperRecord) ||
                         !(GetMember(helperRecord, "IsAlive") is bool helperAlive) || !helperAlive)
                         continue;
                     Ped helper = GetField(candidate, "Ped") as Ped;
@@ -2644,10 +2653,18 @@ namespace EnRAGECompanionsExtension
 
                 if (bestHelperPed == null) continue;
                 LastAutoAssistAtById[id] = now + 10000;
-                if (HelpIncapacitatedCompanion(instance, record, target, bestHelperPed))
+                string selectedHelperId = GetMember(GetField(bestHelper, "Rec"), "Id") as string;
+                if (bestDistance <= 2.35f)
                 {
-                    Log("Nearby recruit started wound assistance for " + id + " using " +
-                        (GetMember(GetField(bestHelper, "Rec"), "Id") as string ?? "another recruit") + ".");
+                    if (HelpIncapacitatedCompanion(instance, record, target, bestHelperPed))
+                        Log("Nearby recruit started wound assistance for " + id + " using " +
+                            (selectedHelperId ?? "another recruit") + ".");
+                }
+                else if (!string.IsNullOrWhiteSpace(selectedHelperId))
+                {
+                    AutoAssistTargetByHelperId[selectedHelperId] = id;
+                    LastAutoAssistMoveAtByHelperId.Remove(selectedHelperId);
+                    Log("Recruit " + selectedHelperId + " is approaching injured companion " + id + ".");
                 }
             }
         }
@@ -4526,6 +4543,8 @@ namespace EnRAGECompanionsExtension
             SetPersistentFollowState(GetField(companion, "Rec"), CompanionFollowState.Dismissed, null);
             string dismissedId = GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty;
             LastIndividualOrderTaskAt.Remove(dismissedId);
+            AutoAssistTargetByHelperId.Remove(dismissedId);
+            LastAutoAssistMoveAtByHelperId.Remove(dismissedId);
             LastObservedHealthById.Remove(dismissedId);
             LastDamageBaselineById.Remove(dismissedId);
             LastDamageAtById.Remove(dismissedId);
@@ -4633,11 +4652,92 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return false;
             object record = GetField(companion, "Rec");
             string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id) || record == null || IsExiledRosterRecord(record) ||
-                (GetMember(record, "IsAlive") is bool alive && !alive)) return false;
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            if (record == null || IsExiledRosterRecord(record) ||
+                (GetMember(record, "IsAlive") is bool alive && !alive))
+            {
+                AutoAssistTargetByHelperId.Remove(id);
+                LastAutoAssistMoveAtByHelperId.Remove(id);
+                return false;
+            }
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             if (ped == null || !ped.Exists()) return false;
+
+            // An assigned helper temporarily overrides its normal follow/wait task so it can
+            // approach the downed recruit. The paired recovery starts only once they're close.
+            string assignedTargetId;
+            if (AutoAssistTargetByHelperId.TryGetValue(id, out assignedTargetId))
+            {
+                bool cancelAssist = player == null || !player.Exists() || player.IsInCombat ||
+                    ped.IsDead || ped.IsInCombat || ped.IsOnMount || GetFieldInt(companion, "State", 2) == 2;
+                object targetCompanion = cancelAssist ? null : FindActiveExtensionCompanion(instance, assignedTargetId);
+                object targetRecord = targetCompanion == null ? null : GetField(targetCompanion, "Rec");
+                Ped targetPed = targetCompanion == null ? null : GetField(targetCompanion, "Ped") as Ped;
+                if (targetPed == null || !targetPed.Exists())
+                    targetPed = targetCompanion == null ? null : GetField(targetCompanion, "Real") as Ped;
+
+                if (targetRecord == null || targetPed == null || !targetPed.Exists() ||
+                    IsExiledRosterRecord(targetRecord) ||
+                    (!(GetMember(targetRecord, "IsAlive") is bool targetAlive) || !targetAlive))
+                    cancelAssist = true;
+
+                int targetRecoveryUntil;
+                if (!cancelAssist &&
+                    RecoveryAnimationUntilById.TryGetValue(assignedTargetId, out targetRecoveryUntil) &&
+                    Game.GameTime < targetRecoveryUntil)
+                    cancelAssist = true;
+
+                bool targetDown = false;
+                if (!cancelAssist)
+                {
+                    CompanionPersistentState targetState = GetPersistentState(targetRecord, false);
+                    targetDown = IsNativeWoundedDown(instance, targetPed) ||
+                        (targetState != null && targetState.Injury != null &&
+                         targetState.Injury.IsIncapacitated && !targetPed.IsDead);
+                    if (!targetDown) cancelAssist = true;
+                }
+
+                if (cancelAssist)
+                {
+                    AutoAssistTargetByHelperId.Remove(id);
+                    LastAutoAssistMoveAtByHelperId.Remove(id);
+                }
+                else
+                {
+                    float distance;
+                    try { distance = targetPed.Position.DistanceTo(ped.Position); }
+                    catch { distance = float.MaxValue; }
+
+                    if (distance <= 2.35f)
+                    {
+                        AutoAssistTargetByHelperId.Remove(id);
+                        LastAutoAssistMoveAtByHelperId.Remove(id);
+                        if (HelpIncapacitatedCompanion(instance, targetRecord, targetPed, ped))
+                            return true;
+                    }
+                    else
+                    {
+                        int nextMoveAt;
+                        if (!LastAutoAssistMoveAtByHelperId.TryGetValue(id, out nextMoveAt) ||
+                            Game.GameTime >= nextMoveAt)
+                        {
+                            bool moving = TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD",
+                                new object[] { ped.Handle, targetPed.Position.X, targetPed.Position.Y,
+                                    targetPed.Position.Z, 1.0f, 2000, targetPed.Heading, 1.0f });
+                            if (moving)
+                                LastAutoAssistMoveAtByHelperId[id] = Game.GameTime + 1100;
+                            else
+                            {
+                                AutoAssistTargetByHelperId.Remove(id);
+                                LastAutoAssistMoveAtByHelperId.Remove(id);
+                                Log("Could not route recruit " + id + " to assist " + assignedTargetId + ".");
+                            }
+                        }
+                        if (AutoAssistTargetByHelperId.ContainsKey(id)) return true;
+                    }
+                }
+            }
 
             int recoveryUntil;
             if (!string.IsNullOrWhiteSpace(id) && RecoveryAnimationUntilById.TryGetValue(id, out recoveryUntil))
