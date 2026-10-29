@@ -17,11 +17,10 @@ AffinityTravelIntervalSeconds=300
 AffinityTravelGain=1
 AffinityCombatGain=2
 AffinityTreatmentGain=3
-; Individual companion orders and wait/rest behavior.
+; Individual companion orders and wait behavior.
 EnableIndividualOrders=true
 EnableWaitMode=true
 WaitRadius=8.0
-RestDurationSeconds=60
 ; Injury detection and recovery countdown for active extension companions.
 EnableInjurySystem=true
 InjuryDamageThresholdPercent=10
@@ -33,5 +32,3 @@ MedicineHealingPercent=100
 MedicineRecoveryReductionSeconds=60
 ; Medicine price in cents; 100 = $1.00, 0 = free.
 RecruitMedicineCostCents=100
-; Whether completed rest clears injuries and restores health.
-RestHealsInjuries=true
