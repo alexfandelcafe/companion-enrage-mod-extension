@@ -161,7 +161,7 @@ La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de su
 - Se rastrean pérdidas de salud significativas en compañeros activos y se guarda una gravedad/temporizador por ID estable. La recuperación progresa mientras el compañero está vivo y no incapacitado.
 - La incapacitación persistente se integra con `WoundedDown(Ped)` de enRAGE, que comprueba `IsIncapacitated` y el seguimiento nativo de heridas. La interacción `Ayudar a levantarse` usa `_INCAPACITATED_REVIVE` cuando el wrapper está disponible, mantiene el registro durante la recuperación y no llama a `RESURRECT_PED`. Una muerte que ya no cumple el estado de herida se registra como muerte confirmada.
 - El remedio usa coste, curación inmediata y reducción de recuperación configurables; excluye muertos confirmados y expulsados y aplica una ventana por registro para reducir los cobros duplicados.
-- Es una aproximación de código fuente al comportamiento de incapacitación de enRAGE, no una reproducción idéntica de su gestor de combate. Si el ped ya entra en muerte real, la extensión conserva el registro como incapacitado y bloquea el respawn automático; el prompt de ayuda puede intentar una recuperación explícita. La apariencia física del ped y los wrappers de tareas/resurrección deben probarse en la versión instalada.
+- Es una integración de código fuente con el estado de herida de enRAGE, no una reproducción idéntica de su gestor de combate. Si el ped deja de cumplir la condición de herida y se confirma una muerte real, el registro se marca como muerto; no se usa `RESURRECT_PED` para forzar una recuperación. La animación sincronizada y los wrappers de la API deben probarse en la versión instalada.
 
 ## Fase 5 — posturas de combate
 
