@@ -432,7 +432,7 @@ namespace EnRAGECompanionsExtension
                 object companion = GetField(_askContextInstance, "_askComp");
                 string key = GetField(companion, "Key") as string;
                 if (!string.IsNullOrEmpty(key) && key.StartsWith(KeyPrefix, StringComparison.Ordinal))
-                    __args[1] = "Dejar de seguirme";
+                    __args[1] = T("action.dismiss");
             }
             catch (Exception ex)
             {
@@ -753,7 +753,7 @@ namespace EnRAGECompanionsExtension
                 // actual draw coordinates rather than fixed screen coordinates that can overlap history.
                 float x = headerX + 0.155f;
                 float width = 0.225f;
-                _uiDrawText.Invoke(null, new object[] { "AFINIDAD " + affinity + "/100", x, headerY, width, 235, 230, 220, 255 });
+                _uiDrawText.Invoke(null, new object[] { TF("affinity.meter", affinity), x, headerY, width, 235, 230, 220, 255 });
                 _uiDrawRect.Invoke(null, new object[] { x, headerY + 0.021f, width, 0.0045f, 26, 24, 20, 220 });
                 if (affinity > 0)
                     _uiDrawRect.Invoke(null, new object[] { x, headerY + 0.021f, width * affinity / 100f, 0.0045f, 189, 153, 83, 245 });
@@ -867,14 +867,14 @@ namespace EnRAGECompanionsExtension
             {
                 SetField(companion, "State", 0);
                 SetField(companion, "AskedAt", Game.GameTime);
-                InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") + " vuelve a seguirte.");
+                InvokeInstance(instance, "ShowSubtitle", TF("order.following", GetMember(record, "Name") as string ?? T("companion.default")));
                 return;
             }
             if (ped.IsOnMount)
                 try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
             SetField(companion, "State", 1);
             SetField(companion, "AskedAt", Game.GameTime);
-            InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") + " esperará aquí.");
+            InvokeInstance(instance, "ShowSubtitle", TF("order.waiting", GetMember(record, "Name") as string ?? T("companion.default")));
         }
         private static bool MaintainIndividualCompanionOrder(object instance, object companion, Ped player)
         {
@@ -1084,10 +1084,9 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(instance, "ShowSubtitle", "La afinidad está desactivada en el archivo INI.");
                 return;
             }
-            string name = GetMember(record, "Name") as string ?? "Tu compañero";
-            InvokeInstance(instance, "ShowSubtitle", name + ": afinidad " + affinity + "/100.");
+            string name = GetMember(record, "Name") as string ?? T("companion.default");
+            InvokeInstance(instance, "ShowSubtitle", TF("affinity.status", name, affinity));
         }
-
         private static void DetailActionsPostfix(object __instance, ref List<string> __result)
         {
             try
@@ -1101,14 +1100,15 @@ namespace EnRAGECompanionsExtension
                     !string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                     _pendingKickRosterRecordId = null;
 
-                // An expelled member must not quietly reappear as callable just because the old
-                // session cache still identifies its record as an extension recruit.
+                string call = T("action.call"), kick = T("action.kick");
+                string confirm = T("action.kick.confirm"), cancel = T("action.kick.cancel");
+                string affinityUp = T("action.affinity.increase"), affinityDown = T("action.affinity.decrease");
                 if (ExiledRosterIds.Contains(id))
                 {
-                    __result.Remove("Llamarlo");
-                    __result.Remove("Echar de la banda");
-                    __result.Remove("Confirmar expulsión");
-                    __result.Remove("Cancelar expulsión");
+                    __result.Remove("Llamarlo"); __result.Remove(call);
+                    __result.Remove("Echar de la banda"); __result.Remove(kick);
+                    __result.Remove("Confirmar expulsión"); __result.Remove(confirm);
+                    __result.Remove("Cancelar expulsión"); __result.Remove(cancel);
                     return;
                 }
 
@@ -1118,43 +1118,42 @@ namespace EnRAGECompanionsExtension
                 if (recruitedRecord)
                 {
                     __result.RemoveAll(action => action != null &&
-                        action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0);
+                        (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)" ||
+                         action == affinityUp || action == affinityDown ||
+                         action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         action.IndexOf("affinity", StringComparison.OrdinalIgnoreCase) >= 0));
                     if (_enableAffinity)
                     {
-                        InsertBeforeBack(__result, "Mejorar afinidad (+10)");
-                        InsertBeforeBack(__result, "Reducir afinidad (-10)");
+                        InsertBeforeBack(__result, affinityUp);
+                        InsertBeforeBack(__result, affinityDown);
                     }
-
-                    __result.Remove("Llamarlo");
+                    __result.Remove("Llamarlo"); __result.Remove(call);
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
-                        InsertBeforeBack(__result, "Llamarlo");
+                        InsertBeforeBack(__result, call);
                 }
 
-                // Any roster member currently attached to the companion system is protected from
-                // expulsion, not just extension recruits. Once dismissed, the record can be removed.
                 if (anyCompanionFollowing)
                 {
-                    __result.Remove("Echar de la banda");
-                    __result.Remove("Confirmar expulsión");
-                    __result.Remove("Cancelar expulsión");
+                    __result.Remove("Echar de la banda"); __result.Remove(kick);
+                    __result.Remove("Confirmar expulsión"); __result.Remove(confirm);
+                    __result.Remove("Cancelar expulsión"); __result.Remove(cancel);
                     return;
                 }
-
                 if (!IsKickableRosterRecord(_latestMainInstance, record)) return;
                 if (string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                 {
-                    int kickIndex = __result.IndexOf("Echar de la banda");
-                    if (kickIndex >= 0)
-                        __result[kickIndex] = "Confirmar expulsión";
-                    else
-                        InsertBeforeBack(__result, "Confirmar expulsión");
-                    InsertBeforeBack(__result, "Cancelar expulsión");
+                    int index = __result.IndexOf("Echar de la banda");
+                    if (index < 0) index = __result.IndexOf(kick);
+                    if (index >= 0) __result[index] = confirm;
+                    else InsertBeforeBack(__result, confirm);
+                    InsertBeforeBack(__result, cancel);
                 }
                 else
                 {
-                    __result.Remove("Confirmar expulsión");
-                    __result.Remove("Cancelar expulsión");
-                    InsertBeforeBack(__result, "Echar de la banda");
+                    __result.Remove("Confirmar expulsión"); __result.Remove(confirm);
+                    __result.Remove("Cancelar expulsión"); __result.Remove(cancel);
+                    __result.Remove(kick);
+                    InsertBeforeBack(__result, kick);
                 }
             }
             catch (Exception ex) { Log("Roster action injection warning: " + Unwrap(ex)); }
@@ -1202,7 +1201,7 @@ namespace EnRAGECompanionsExtension
                 string recordIdForConfirmation = GetMember(record, "Id") as string;
                 if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
                     string.Equals(_pendingKickRosterRecordId, recordIdForConfirmation, StringComparison.OrdinalIgnoreCase) &&
-                    action != "Confirmar expulsión" && action != "Cancelar expulsión" && action != "Echar de la banda")
+                    action != T("action.kick.confirm") && action != T("action.kick.cancel") && action != T("action.kick"))
                 {
                     // Leaving the confirmation row or choosing another action abandons the pending
                     // decision; reopening the same sheet must not silently preserve old confirmation.
@@ -1212,7 +1211,7 @@ namespace EnRAGECompanionsExtension
                 bool recruitedRecord = IsRecruitedRosterRecord(record);
                 bool alreadyFollowing = recruitedRecord && IsRecruitedRecordAlreadyFollowing(_latestMainInstance, record);
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
-                if (action == "Llamarlo" && recruitedRecord)
+                if (action == T("action.call") && recruitedRecord)
                 {
                     if (alreadyFollowing)
                     {
@@ -1222,14 +1221,14 @@ namespace EnRAGECompanionsExtension
                     CallRecruitedRosterMember(_latestMainInstance, __instance, record);
                     return false;
                 }
-                if (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)")
+                if (action == T("action.affinity.increase") || action == T("action.affinity.decrease"))
                 {
-                    AdjustAffinityFromRoster(_latestMainInstance, record, action == "Mejorar afinidad (+10)" ? 10 : -10);
+                    AdjustAffinityFromRoster(_latestMainInstance, record, action == T("action.affinity.increase") ? 10 : -10);
                     return false;
                 }
                 if (ExiledRosterIds.Contains(recordIdForConfirmation))
                     return true;
-                if (anyCompanionFollowing && (action == "Echar de la banda" || action == "Confirmar expulsión"))
+                if (anyCompanionFollowing && (action == T("action.kick") || action == T("action.kick.confirm")))
                 {
                     InvokeInstance(_latestMainInstance, "ShowSubtitle", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero.");
                     return false;
@@ -1237,16 +1236,16 @@ namespace EnRAGECompanionsExtension
 
                 if (!IsKickableRosterRecord(_latestMainInstance, record)) return true;
                 string id = GetMember(record, "Id") as string;
-                if (action == "Echar de la banda")
+                if (action == T("action.kick"))
                 {
                     _pendingKickRosterRecordId = id;
                     SetField(__instance, "_action", selected);
                     InvokeInstance(_latestMainInstance, "ShowSubtitle",
-                        "Aviso: la expulsión es irreversible y podría tener consecuencias para ti en el futuro. Elige Confirmar expulsión para continuar.");
+                        TF("subtitle.kick.warning", T("action.kick.confirm")));
                     Log("Requested confirmation before expelling story roster member " + id + ".");
                     return false;
                 }
-                if (action == "Confirmar expulsión")
+                if (action == T("action.kick.confirm"))
                 {
                     if (!string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                     {
@@ -1259,7 +1258,7 @@ namespace EnRAGECompanionsExtension
                     SetField(__instance, "_action", 0);
                     return false;
                 }
-                if (action == "Cancelar expulsión")
+                if (action == T("action.kick.cancel"))
                 {
                     _pendingKickRosterRecordId = null;
                     SetField(__instance, "_action", 0);
@@ -1391,12 +1390,12 @@ namespace EnRAGECompanionsExtension
         {
             if (instance == null || record == null) return;
             string id = GetMember(record, "Id") as string;
-            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? "Compañero";
+            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? T("companion.default");
             if (string.IsNullOrWhiteSpace(id) || !IsRecruitedRosterRecord(record)) return;
             if (IsExiledRosterRecord(record))
             {
                 HideRecruitMedicinePrompt();
-                InvokeInstance(instance, "ShowSubtitle", name + " ya fue expulsado de la banda y no puede recibir remedios.");
+                InvokeInstance(instance, "ShowSubtitle", TF("medicine.exiled", name));
                 return;
             }
             if (GetMember(record, "IsAlive") is bool alive && !alive)
@@ -1426,7 +1425,7 @@ namespace EnRAGECompanionsExtension
             {
                 if (PendingFullHealthIds.Remove(id))
                     SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-                InvokeInstance(instance, "ShowSubtitle", name + " ya tiene la salud al máximo y no hay ninguna herida pendiente.");
+                InvokeInstance(instance, "ShowSubtitle", TF("medicine.full_health", name));
                 return;
             }
 
@@ -1495,9 +1494,7 @@ namespace EnRAGECompanionsExtension
             AwardAffinity(record, _affinityTreatmentGain, "treatment");
             PendingFullHealthIds.Remove(id);
             SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-            InvokeInstance(instance, "ShowSubtitle", name + " recibió el remedio. Curación: " +
-                _medicineHealingPercent + "%. Coste: " +
-                (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) + " dólares.");
+            InvokeInstance(instance, "ShowSubtitle", TF("medicine.success", name, _medicineHealingPercent, (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture)));
             Log("Applied contextual medicine to " + name + " (record=" + id + ").");
         }
 
@@ -1679,7 +1676,7 @@ namespace EnRAGECompanionsExtension
                 try { InvokeInstance(instance, "SaveRoster"); }
                 catch (Exception ex) { Log("Save after expelling roster member failed: " + Unwrap(ex)); }
                 EnforceExiledRosterMembers(instance);
-                InvokeInstance(instance, "ShowSubtitle", name + " ha sido expulsado de la banda. La decisión no se puede deshacer.");
+                InvokeInstance(instance, "ShowSubtitle", TF("kick.success", name));
                 Log("Permanently expelled roster member " + name + " (record=" + id + ", former gang=" + (formerGang ?? "(none)") + ").");
             }
             catch (Exception ex)
@@ -1876,9 +1873,7 @@ namespace EnRAGECompanionsExtension
                     SetField(activeCompanion, "AskedAt", Game.GameTime);
                 }
                 try { InvokeInstance(instance, "SaveRoster"); } catch { }
-                InvokeInstance(instance, "ShowSubtitle", existingPed != null
-                    ? name + " ha vuelto y vuelve a seguirte."
-                    : name + " fue llamado y se acerca para seguirte.");
+                InvokeInstance(instance, "ShowSubtitle", existingPed != null ? TF("recruit.success.adopted", name) : TF("recruit.success.approaching", name));
                 InvokeInstance(menu, "Toggle");
             }
             catch
@@ -2209,7 +2204,7 @@ namespace EnRAGECompanionsExtension
                 {
                     HideGenericRecruitPrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, 1980406895);
-                    string promptLabel = IsCachedRecruitedPed(candidate.Handle) ? "Llamarlo" : "Cabalga conmigo";
+                    string promptLabel = IsCachedRecruitedPed(candidate.Handle) ? T("action.call") : T("recruit.prompt.start");
                     object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
                     _genericPrompt = Convert.ToInt32(result);
                     _genericPromptFor = candidate.Handle;
@@ -2284,7 +2279,7 @@ namespace EnRAGECompanionsExtension
                 }
                 CompanionFollowState current = state == null ? CompanionFollowState.Following : state.FollowState;
                 CompanionFollowState next = current == CompanionFollowState.Following ? CompanionFollowState.Waiting : CompanionFollowState.Following;
-                string label = next == CompanionFollowState.Waiting ? "Quédate aquí" : "Sígueme";
+                string label = next == CompanionFollowState.Waiting ? T("order.wait_label") : T("order.follow_label");
                 int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
                 UpdateIndividualOrderPrompt(instance, target, group, label, IndividualOrderPromptControl, next, cached.Record);
             }
@@ -2383,7 +2378,7 @@ namespace EnRAGECompanionsExtension
                     HideIncapacitatedPrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, IncapacitatedPromptControl);
                     _incapacitatedPrompt = Convert.ToInt32(_makePrompt.Invoke(null,
-                        new object[] { control, "Ayudar a levantarse", true, group }));
+                        new object[] { control, T("incapacitated.prompt"), true, group }));
                     _incapacitatedPromptFor = target.Handle;
                     _incapacitatedPromptGroup = group;
                     _incapacitatedPromptArmed = false;
@@ -2517,8 +2512,7 @@ namespace EnRAGECompanionsExtension
                 LastInjuryRecoveryAtById[id] = Game.GameTime;
             }
             try { InvokeInstance(instance, "SaveRoster"); } catch { }
-            InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") +
-                " se ha levantado. La herida seguirá recuperándose con el tiempo.");
+            InvokeInstance(instance, "ShowSubtitle", TF("incapacitated.helped", GetMember(record, "Name") as string ?? T("companion.default")));
         }
 
         private static void UpdateCombatStancePrompt(object instance, Ped player)
@@ -2551,7 +2545,7 @@ namespace EnRAGECompanionsExtension
 
                 CompanionPersistentState state = GetPersistentState(cached.Record, true);
                 if (state == null) { HideCombatStancePrompt(); return; }
-                string label = "Postura: " + CombatStanceLabel(state.CombatStance);
+                string label = TF("stance.prefix", CombatStanceLabel(state.CombatStance));
                 int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
                 if (_combatStancePrompt == 0 || _combatStancePromptFor != target.Handle ||
                     _combatStancePromptGroup != group || !IsPromptValid(_combatStancePrompt) ||
@@ -2594,16 +2588,15 @@ namespace EnRAGECompanionsExtension
                 Log("Combat stance prompt failed: " + Unwrap(ex));
             }
         }
-
         private static string CombatStanceLabel(CompanionCombatStance stance)
         {
             switch (stance)
             {
-                case CompanionCombatStance.HoldPosition: return "Mantener posición";
-                case CompanionCombatStance.CoverPlayer: return "Cubrir al jugador";
-                case CompanionCombatStance.DefendArea: return "Defender la zona";
-                case CompanionCombatStance.FireOnSignal: return "Fuego a mi señal";
-                default: return "Seguir órdenes";
+                case CompanionCombatStance.HoldPosition: return T("stance.hold");
+                case CompanionCombatStance.CoverPlayer: return T("stance.cover");
+                case CompanionCombatStance.DefendArea: return T("stance.defend");
+                case CompanionCombatStance.FireOnSignal: return T("stance.fire");
+                default: return T("stance.follow");
             }
         }
 
@@ -2623,8 +2616,7 @@ namespace EnRAGECompanionsExtension
                 try { state.SavedPosition.Heading = ped.Heading; } catch { state.SavedPosition.Heading = 0f; }
             }
             SavePersistentState(state);
-            InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") +
-                ": postura " + CombatStanceLabel(state.CombatStance) + ".");
+            InvokeInstance(instance, "ShowSubtitle", TF("stance.changed", GetMember(record, "Name") as string ?? T("companion.default"), CombatStanceLabel(state.CombatStance)));
         }
 
         private static void HideCombatStancePrompt()
@@ -2675,8 +2667,8 @@ namespace EnRAGECompanionsExtension
                 {
                     HideRecruitMedicinePrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, RecruitMedicinePromptControl);
-                    string promptLabel = "Dar remedio ($" +
-                        (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) + ")";
+                    string promptLabel = TF("prompt.medicine",
+                        (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture));
                     object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
                     _medicinePrompt = Convert.ToInt32(result);
                     _medicinePromptFor = target.Handle;
@@ -2893,7 +2885,7 @@ namespace EnRAGECompanionsExtension
             }
             if (!IsConfiguredRecruitmentFactionAvailable())
             {
-                InvokeInstance(__instance, "ShowSubtitle", "La facción configurada '" + (_recruitGangId ?? "vdl") + "' no existe en enRAGE. Revisa RecruitGangId en el archivo INI.");
+                InvokeInstance(__instance, "ShowSubtitle", TF("recruit.faction_missing", _recruitGangId ?? "vdl"));
                 Log("Recruitment blocked: unknown enRAGE faction ID '" + (_recruitGangId ?? "vdl") + "'.");
                 return;
             }
@@ -2999,7 +2991,7 @@ namespace EnRAGECompanionsExtension
                 SetField(__instance, "_askKey", null);
                 SetField(__instance, "_askComp", null);
                 InvokeInstance(__instance, "HideAskPrompt");
-                InvokeInstance(__instance, "ShowSubtitle", name + " ahora combate de tu lado.");
+                InvokeInstance(__instance, "ShowSubtitle", TF("companion.recruited", name));
                 Log("Recruited ped=" + ped.Handle + "; model=0x" + modelHash.ToString("X8") + "; role detached if needed.");
             }
             catch
@@ -4410,7 +4402,7 @@ namespace EnRAGECompanionsExtension
             SetField(instance, "_askKey", null);
             SetField(instance, "_askComp", null);
             InvokeInstance(instance, "HideAskPrompt");
-            InvokeInstance(instance, "ShowSubtitle", name + " deja de seguirte y vuelve a comportarse como un NPC del mundo.");
+            InvokeInstance(instance, "ShowSubtitle", TF("companion.dismissed", name));
             Log("Dismissed extension companion " + name + "; pedestrian preserved and ambient AI resumed.");
         }
         private static void MaintainExtensionCompanionDamageability(object companion, Ped player)
@@ -4529,8 +4521,7 @@ namespace EnRAGECompanionsExtension
                         SavePersistentState(state);
                         LastDamageBaselineById[id] = health;
                         if (!wasInjured)
-                            InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") +
-                                " está herido. Un remedio ayudará a recuperarlo.");
+                            InvokeInstance(instance, "ShowSubtitle", TF("injury.detected", GetMember(record, "Name") as string ?? T("companion.default")));
                         Log("Tracked companion injury " + id + "; damage=" + delta + ", severity=" + state.Injury.Severity + ".");
                     }
                 }
@@ -4688,8 +4679,7 @@ namespace EnRAGECompanionsExtension
                 try { InvokeInstance(instance, "SaveRoster"); } catch { }
             }
             if (!wasIncapacitated)
-                InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") +
-                    " ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse.");
+                InvokeInstance(instance, "ShowSubtitle", TF("incapacitated.entered", GetMember(record, "Name") as string ?? T("companion.default")));
             return true;
         }
 
@@ -4793,15 +4783,16 @@ namespace EnRAGECompanionsExtension
             try { return assembly.GetType(name, false); }
             catch { return null; }
         }
-
         private static object InvokeInstance(object instance, string name, params object[] args)
         {
-            if (instance == null)
-                return null;
+            if (instance == null) return null;
+            if (string.Equals(name, "ShowSubtitle", StringComparison.OrdinalIgnoreCase) &&
+                args != null && args.Length > 0 && args[0] is string subtitle)
+                args[0] = TranslateExactUiText(subtitle);
+
             MethodInfo method = FindMethod(instance.GetType(), name, args == null ? 0 : args.Length,
                 p => args == null || p.Length == args.Length);
-            if (method == null)
-                return null;
+            if (method == null) return null;
             try { return method.Invoke(instance, args); }
             catch (Exception ex) { Log(name + " invocation failed: " + Unwrap(ex)); return null; }
         }
@@ -4969,10 +4960,13 @@ namespace EnRAGECompanionsExtension
                 { "order.not_found", "No se pudo localizar al compañero para aplicar la orden." },
                 { "order.following", "{0} vuelve a seguirte." },
                 { "order.waiting", "{0} esperará aquí." },
+                { "order.wait_label", "Quédate aquí" },
+                { "order.follow_label", "Sígueme" },
                 { "affinity.disabled", "La afinidad está desactivada en el archivo INI." },
                 { "affinity.status", "{0}: afinidad {1}/100." },
                 { "affinity.meter", "AFINIDAD {0}/100" },
                 { "action.call", "Llamarlo" },
+                { "action.dismiss", "Dejar de seguirme" },
                 { "action.kick", "Echar de la banda" },
                 { "action.kick.confirm", "Confirmar expulsión" },
                 { "action.kick.cancel", "Cancelar expulsión" },
@@ -5095,6 +5089,15 @@ namespace EnRAGECompanionsExtension
             if (DefaultExtensionTexts.TryGetValue(key, out value))
                 return value;
             return key;
+        }
+
+        private static string TranslateExactUiText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            foreach (KeyValuePair<string, string> item in DefaultExtensionTexts)
+                if (string.Equals(item.Value, text, StringComparison.Ordinal))
+                    return T(item.Key);
+            return text;
         }
 
         private static string TF(string key, params object[] args)
