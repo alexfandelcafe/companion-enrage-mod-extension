@@ -1439,9 +1439,8 @@ namespace EnRAGECompanionsExtension
             }
             if (cash < _recruitMedicineCostCents)
             {
-                InvokeInstance(instance, "ShowSubtitle", "Necesitas " +
-                    (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture) +
-                    " dólares para comprar el remedio.");
+                InvokeInstance(instance, "ShowSubtitle", TF("medicine.insufficient_cash",
+                    (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture)));
                 return;
             }
 
@@ -1756,7 +1755,7 @@ namespace EnRAGECompanionsExtension
             if (player == null || !player.Exists()) return;
 
             string id = GetMember(record, "Id") as string;
-            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? "Compañero";
+            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? T("companion.default");
             uint modelHash = 0U;
             if (!string.IsNullOrWhiteSpace(id)) RecruitedRosterModels.TryGetValue(id, out modelHash);
             if (modelHash == 0U) modelHash = ConvertToUInt32(GetMember(record, "ModelHash"));
@@ -1767,7 +1766,7 @@ namespace EnRAGECompanionsExtension
             }
             if (GetMember(record, "IsAlive") is bool isAlive && !isAlive)
             {
-                InvokeInstance(instance, "ShowSubtitle", name + " figura como fallecido en el roster.");
+                InvokeInstance(instance, "ShowSubtitle", TF("roster.dead", name));
                 return;
             }
 
@@ -1779,7 +1778,7 @@ namespace EnRAGECompanionsExtension
                 string existingId = GetMember(existingRecord, "Id") as string;
                 if (string.Equals(existingId, id, StringComparison.OrdinalIgnoreCase) && GetFieldInt(existing, "State", 2) != 2)
                 {
-                    InvokeInstance(instance, "ShowSubtitle", name + " ya te está siguiendo.");
+                    InvokeInstance(instance, "ShowSubtitle", TF("roster.already_following", name));
                     return;
                 }
             }
@@ -4975,7 +4974,7 @@ namespace EnRAGECompanionsExtension
                 { "subtitle.kick.cancelled", "Expulsión cancelada." },
                 { "subtitle.already_following", "Ese miembro ya te está siguiendo." },
                 { "subtitle.cannot_kick_following", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero." },
-                { "subtitle.kick.warning", "Aviso: la expulsión es irreversible y podría tener consecuencias para ti en el futuro. Elige Confirmar expulsión para continuar." },
+                { "subtitle.kick.warning", "Aviso: la expulsión es irreversible y podría tener consecuencias para ti en el futuro. Elige {0} para continuar." },
                 { "subtitle.kick.invalid", "La confirmación ya no es válida. Vuelve a seleccionar la expulsión." },
                 { "medicine.exiled", "{0} ya fue expulsado de la banda y no puede recibir remedios." },
                 { "medicine.dead", "No puedes curar a un miembro fallecido del roster." },
