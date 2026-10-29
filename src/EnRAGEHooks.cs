@@ -5089,6 +5089,33 @@ namespace EnRAGECompanionsExtension
                 if (File.Exists(path))
                 {
                     string[] existingLines = File.ReadAllLines(path);
+                    // Remove only the obsolete, known extension-generated appearance settings.
+                    // Their behavior was removed; leave all unrelated user configuration intact.
+                    string[] cleanedLines = existingLines.Where(raw =>
+                    {
+                        string candidate = (raw ?? string.Empty).Trim();
+                        if (candidate.Equals("; Capture/reapply outfit hash, standard clothing slots, hat/accessory props, and current equipped weapon hash when wrappers exist.", StringComparison.OrdinalIgnoreCase) ||
+                            candidate.Equals("; Not full YMT XML/material persistence or a full weapon inventory snapshot.", StringComparison.OrdinalIgnoreCase))
+                            return false;
+                        int separator = candidate.IndexOf('=');
+                        if (separator <= 0) return true;
+                        string key = candidate.Substring(0, separator).Trim();
+                        return !key.Equals("EnableAppearancePersistence", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase);
+                    }).ToArray();
+                    if (cleanedLines.Length != existingLines.Length)
+                    {
+                        try
+                        {
+                            File.WriteAllLines(path, cleanedLines);
+                            existingLines = cleanedLines;
+                        }
+                        catch (Exception ex)
+                        {
+                            // The old keys are ignored by the current parser even if this cleanup fails.
+                            Log("Could not remove obsolete INI entries: " + Unwrap(ex));
+                        }
+                    }
                     HashSet<string> existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (string existingLine in existingLines)
                     {
