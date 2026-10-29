@@ -52,8 +52,6 @@ AffinityTravelIntervalSeconds=300
 AffinityTravelGain=1
 AffinityCombatGain=2
 AffinityTreatmentGain=3
-EnableAppearancePersistence=true
-PreserveSavedOutfit=true
 EnableIndividualOrders=true
 EnableWaitMode=true
 WaitRadius=8.0
@@ -75,7 +73,6 @@ RestHealsInjuries=true
 - `EnableAffinity`: displays the companion's affinity meter and enables affinity changes.
 - `AffinityTravelIntervalSeconds`: seconds between travel checks (clamped to 30–7200). Travel gain is awarded when the companion remains nearby and the player has moved at least 100 metres during the interval.
 - `AffinityTravelGain`, `AffinityCombatGain`, `AffinityTreatmentGain`: gains for travel, combat (at most once per 30 seconds of an encounter), and a successful paid treatment. Affinity is clamped to 0–100. The detail sheet also exposes explicit `Mejorar afinidad (+10)` and `Reducir afinidad (-10)` actions for controlled testing.
-- `EnableAppearancePersistence` and `PreserveSavedOutfit`: capture/reapply a meta-ped outfit hash if available, standard clothing variation slots, hat/accessory prop slots, and the currently equipped weapon hash. Native wrappers are resolved dynamically. This does not enumerate the full weapon inventory, ammo, or every extra YMT material/albedo/normal variation.
 - `EnableIndividualOrders`: enables contextual order prompts when aiming at an active extension companion. With default controls the primary order uses the context-no action (F), `Descansar` uses R, incapacitation recovery uses E, and medicine/stance prompts use a separate action. They are not added to the roster sheet and do not intentionally rebind the native G action.
 - `EnableWaitMode`: controls `Quédate aquí`; when enabled the companion returns to the saved anchor if it exceeds `WaitRadius`, then remains there instead of running enRAGE's default follow task.
 - `WaitRadius`: radius in metres around the saved wait/rest position (clamped to 1–50 m; default 8).
@@ -105,7 +102,6 @@ This is source code, not a compiled or tested binary. The available environment 
 
 - `Dejar de seguirme` now preserves the released pedestrian entity instead of letting enRAGE's `Cleanup` delete a spawned replacement. It clears the companion wrapper and blip, removes the NPC from the player group, and gives the pedestrian a standard wander task. If mounted, it requests a dismount and starts wandering once on foot. The recruit remains associated with the saved roster record for possible later recall.
 - To treat an extension recruit, aim directly at the NPC in the world and hold the contextual `Dar remedio` prompt. Cost, immediate healing percentage, and recovery reduction use the INI settings. The handler revalidates the exact targeted roster ID before charging; confirmed-dead/exiled records and stale targets are rejected, and a short per-record transaction lock guards against duplicate debits. An NPC at full health can still receive treatment if a persisted injury countdown remains.
-- Appearance data is stored by stable roster ID. In addition to the legacy meta-ped outfit hash, the extension tries to capture/restore standard component variations, prop slots (including slot 0, commonly used for hats), and the currently equipped weapon hash. Runtime reflection lets unsupported wrappers fail without crashing the script. Same-session recall reuses the original pedestrian when available. Standard component slots are not the full YMT data model (custom parts, materials, albedo/normal maps and every tint/palette field); weapon inventory and ammunition are not fully enumerated. A missing or zero hash is logged rather than fabricated.
 - Roster members in the Van der Linde story sheet and regular `Roster` records belonging to the configured `RecruitGangId`/`RecruitRosterId` can have `Echar de la banda`, including custom/new non-story records regardless of ID prefix. A member who is currently following the player as an active companion cannot be expelled; dismiss the companion first. A dismissed extension recruit can then be recalled with `Llamarlo` or permanently expelled. The first selection shows a warning that expulsion cannot be undone and may have future consequences; `Confirmar expulsión` commits the change and `Cancelar expulsión` abandons it; leaving the sheet with Back also cancels the pending confirmation. Expulsions are kept in `EnRAGECompanionsExtension.exiled-story-roster.txt` under the active `scripts` directory so the story-roster sync does not automatically add them back. The persistent file is not meant to be edited during ordinary gameplay.
 - The old `EnRAGECompanionsExtension.pending-heals.txt` file may remain from an earlier source revision, but the current contextual prompt does not queue remote cures: it only treats the live NPC currently being aimed at.
 
@@ -140,19 +136,14 @@ The example is a placeholder: replace `custom_faction_id` with the exact ID of t
 
 ## Fase 2 — base de estados persistentes
 
-La rama `phase2-persistent-companion-state` añade la base de persistencia versionada para las siguientes fases. No sustituye ni elimina los hooks de reclutamiento existentes.
+La rama `phase2-persistent-companion-state` añade persistencia versionada por ID de registro. No sustituye ni elimina los hooks de reclutamiento existentes.
 
-- `src/CompanionPersistentState.cs`: modelos por ID de registro de enRAGE para seguimiento/espera, preferencia de montura, postura de combate, posición guardada, heridas, afinidad y campos separados de apariencia.
-- `src/CompanionStateStore.cs`: carga y guardado JSON versionado, validación de valores, guardado diferido por cambios, archivo temporal y copia de respaldo, y lectura de outfits antiguos.
+- `src/CompanionPersistentState.cs`: conserva seguimiento/espera, preferencia de montura, postura de combate, posición guardada, heridas, afinidad, temporizador de descanso y orden del roster.
+- `src/CompanionStateStore.cs`: carga y guardado JSON versionado, validación de valores, guardado diferido por cambios, archivo temporal, copia de respaldo y recuperación desde el último backup válido.
 - `src/CompanionStateRuntime.cs`: inicializa el almacén al arrancar el script sin introducir una referencia a `NemesisMod.dll`.
 - `src/EntryPoint.cs`: inicializa el almacén al construir el script.
 
-Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Conserva los datos por el ID persistente del registro, nunca por el handle temporal del ped. El archivo antiguo `scripts/EnRAGECompanionsExtension.outfits.txt` se lee en formato `ID|HASH_HEXADECIMAL`; la migración no lo elimina ni lo reescribe. Los datos antiguos se importan solo cuando el registro nuevo aún no contiene un hash de outfit.
-
-Esta revisión ya conecta la afinidad (barra anclada a las coordenadas reales del encabezado SENTIMIENTOS y cambios por viaje, combate y tratamiento) y la persistencia del hash de vestimenta con los hooks de juego. La base de estado también conserva datos anteriores de postura, preferencia de montura, posición y lesión al migrar el formato antiguo; esos campos no deben considerarse funcionales en el juego solo por existir en el JSON. La fuente intenta capturar/restaurar componentes estándar de ropa, props como sombreros y el arma equipada, pero los wrappers nativos y el resultado visual aún requieren verificación dentro de RDR2. La captura completa de YMT sigue pendiente.
-
-El esquema actual es la versión 1. El formato de desarrollo anterior `{"Version":1,"Records":[...]}` se importa a `SchemaVersion/Companions` sin descartar afinidad, postura, preferencia de montura, posición guardada, lesión, temporizador de descanso ni hashes de apariencia válidos. Los JSON que sí sean ilegibles o incompatibles se apartan con sufijo `.corrupt-<fecha>` para conservarlos y el almacén intenta recuperar los hashes del archivo antiguo. El guardado se realiza al detectar cambios o migración, no en cada frame.
-
+Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Los datos se guardan por ID estable del registro, nunca por el handle temporal del ped. El esquema nuevo es la versión 2 y sigue leyendo el esquema versionado anterior; los campos de funciones retiradas dejan de usarse y no se vuelven a guardar. El formato de desarrollo `{"Version":1,"Records":[...]}` conserva los datos antiguos de orden, postura, montura, posición, lesión, temporizador de descanso y afinidad. Si existe un archivo auxiliar de versiones anteriores, el código nuevo lo ignora y no lo elimina del disco.
 
 ## Fase 3 — órdenes individuales y descanso
 
@@ -172,10 +163,8 @@ La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de su
 - El remedio usa coste, curación inmediata y reducción de recuperación configurables; excluye muertos confirmados y expulsados y aplica una ventana por registro para reducir los cobros duplicados.
 - Es una aproximación de código fuente al comportamiento de incapacitación de enRAGE, no una reproducción idéntica de su gestor de combate. La combinación de `IsDead`, `IsIncapacitated`, ragdoll y los wrappers de resurrección debe probarse en la versión instalada.
 
-## Fase 5 — posturas y personalización
+## Fase 5 — posturas de combate
 
-- El prompt de postura solo aparece al apuntar a un compañero activo si se detecta un enemigo que está atacando al jugador. Las posturas se guardan por roster; `Fuego a mi señal` requiere que el jugador esté disparando o haya disparado dentro de una ventana breve.
-- La personalización intenta guardar/restaurar el hash de outfit, las variaciones estándar de ropa, props como sombreros/accesorios y el arma actualmente equipada. No se limpia el inventario para restaurar un hash.
-- La compatibilidad completa con YMT aún no está implementada. `Sir Joseph's Ultimate YMT Helper` es una herramienta `.asi` con funciones de edición y persistencia más amplias; no hay una API compartida confirmada para invocarla desde este script. Integrarla requiere confirmar un formato/API de intercambio o implementar un lector/aplicador YMT propio. Las variaciones estándar por componente no equivalen a todas las piezas/materiales YMT.
+- El prompt de postura aparece al apuntar a un compañero activo solo cuando se detecta un NPC que está atacando al jugador. Las posturas se guardan por roster; `Fuego a mi señal` requiere un disparo actual o reciente.
 
-Las órdenes, las heridas, la recuperación por descanso, los prompts y la personalización siguen siendo cambios de código fuente, sin validación dentro de RDR2. Esta revisión tampoco modifica `main` ni fusiona el PR.
+Las órdenes, las heridas, la recuperación por descanso y los prompts siguen siendo cambios de código fuente, sin validación dentro de RDR2. Esta revisión tampoco modifica `main` ni fusiona el PR.
