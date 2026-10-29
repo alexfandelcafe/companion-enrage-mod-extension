@@ -39,6 +39,7 @@ namespace EnRAGECompanionsExtension
         private static MethodInfo _promptValid;
         private static MethodInfo _interrogable;
         private static MethodInfo _updateInterrogation;
+        private static MethodInfo _woundedDown;
         private static MethodInfo _companionFight;
         private static MethodInfo _modelFemale;
         private static bool _loggedMissingModelGender;
@@ -121,6 +122,10 @@ namespace EnRAGECompanionsExtension
         private static readonly Dictionary<string, int> LastInjuryRecoveryAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastInjuryPersistAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastAutoAssistAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> RecoveryAnimationUntilById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastPlayerWeaponFireAt = -100000;
         private static readonly Dictionary<string, int> LastMedicineTransactionAt =
@@ -205,6 +210,7 @@ namespace EnRAGECompanionsExtension
                 _promptValid = FindMethod(_mainType, "PromptValid", 1, p => p[0].ParameterType == typeof(int));
                 _interrogable = FindMethod(_mainType, "Interrogable", 3, p => IsPedType(p[0].ParameterType) && IsPedType(p[1].ParameterType) && p[2].ParameterType == typeof(float));
                 _updateInterrogation = FindMethod(_mainType, "UpdateInterrogation", 1, p => IsPedType(p[0].ParameterType));
+                _woundedDown = FindMethod(_mainType, "WoundedDown", 1, p => IsPedType(p[0].ParameterType));
                 _companionFight = FindMethod(_mainType, "CompanionFight", 2,
                     p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
                 Type modelsType = _mainType.Assembly.GetType("NemesisSystem.Models", false);
@@ -494,6 +500,7 @@ namespace EnRAGECompanionsExtension
                 IList list = GetField(__instance, "_comps") as IList;
                 if (list == null || list.Count == 0) return;
                 object[] snapshot = list.Cast<object>().ToArray();
+                TryAutoAssistIncapacitatedCompanions(__instance, player, snapshot);
                 foreach (object companion in snapshot)
                 {
                     if (companion == null) continue;
@@ -793,6 +800,11 @@ namespace EnRAGECompanionsExtension
         {
             if (instance == null || record == null || !_enableIndividualOrders) return;
             if (order != CompanionFollowState.Waiting && order != CompanionFollowState.Following) return;
+            if (IsRosterRecordIncapacitated(record))
+            {
+                InvokeInstance(instance, "ShowSubtitle", T("incapacitated.only_help"));
+                return;
+            }
             if (order == CompanionFollowState.Waiting && !_enableWaitMode)
             {
                 InvokeInstance(instance, "ShowSubtitle", "El modo de espera está desactivado en el archivo INI.");
@@ -1071,6 +1083,14 @@ namespace EnRAGECompanionsExtension
 
                 string call = T("action.call"), kick = T("action.kick");
                 string confirm = T("action.kick.confirm"), cancel = T("action.kick.cancel");
+                if (IsRosterRecordIncapacitated(record))
+                {
+                    __result.RemoveAll(action => action != null && action != "Atrás" && action != "Back" && action != "Volver");
+                    if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
+                        string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
+                        _pendingKickRosterRecordId = null;
+                    return;
+                }
                 if (ExiledRosterIds.Contains(id))
                 {
                     __result.Remove("Llamarlo"); __result.Remove(call);
@@ -1163,6 +1183,12 @@ namespace EnRAGECompanionsExtension
                 if (actions == null || selected < 0 || selected >= actions.Count) return true;
                 string action = actions[selected];
                 string recordIdForConfirmation = GetMember(record, "Id") as string;
+                if (IsRosterRecordIncapacitated(record))
+                {
+                    _pendingKickRosterRecordId = null;
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("incapacitated.only_help"));
+                    return false;
+                }
                 if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
                     string.Equals(_pendingKickRosterRecordId, recordIdForConfirmation, StringComparison.OrdinalIgnoreCase) &&
                     action != T("action.kick.confirm") && action != T("action.kick.cancel") && action != T("action.kick"))
@@ -2154,7 +2180,7 @@ namespace EnRAGECompanionsExtension
                 _preferredGenericPed = null;
                 if (candidate == null && !hasPreferredTarget)
                     candidate = FindCandidate(instance, player);
-                if (candidate == null || !candidate.Exists())
+                if (candidate == null || !candidate.Exists() || IsPedIncapacitatedRecruit(candidate))
                 {
                     HideGenericRecruitPrompt();
                     return;
@@ -2345,8 +2371,8 @@ namespace EnRAGECompanionsExtension
                 }
 
                 CompanionPersistentState state = GetPersistentState(cached.Record, true);
-                bool down = target.IsIncapacitated ||
-                    (state != null && state.Injury != null && state.Injury.IsIncapacitated);
+                bool down = IsNativeWoundedDown(instance, target) ||
+                    (state != null && state.Injury != null && state.Injury.IsIncapacitated && !target.IsDead);
                 if (!down)
                 {
                     HideIncapacitatedPrompt();
@@ -2389,7 +2415,7 @@ namespace EnRAGECompanionsExtension
                 _incapacitatedPromptArmed = false;
                 HideIncapacitatedPrompt();
                 if (selected != null && selected.Exists() && selected.Handle == target.Handle)
-                    HelpIncapacitatedCompanion(instance, cached.Record, selected);
+                    HelpIncapacitatedCompanion(instance, cached.Record, selected, player);
             }
             catch (Exception ex)
             {
@@ -2410,20 +2436,43 @@ namespace EnRAGECompanionsExtension
             _incapacitatedPromptPed = null;
         }
 
-        private static void HelpIncapacitatedCompanion(object instance, object record, Ped ped)
+        private static bool HelpIncapacitatedCompanion(object instance, object record, Ped ped, Ped helperPed)
         {
             if (instance == null || record == null || ped == null || !ped.Exists() ||
+                helperPed == null || !helperPed.Exists() || helperPed.Handle == ped.Handle ||
                 IsExiledRosterRecord(record) ||
                 (GetMember(record, "IsAlive") is bool alive && !alive))
-                return;
+                return false;
 
-            if (ped.IsDead)
+            CompanionPersistentState state = GetPersistentState(record, false);
+            bool persistentlyDown = state != null && state.Injury != null && state.Injury.IsIncapacitated;
+            bool nativeWoundedDown = IsNativeWoundedDown(instance, ped);
+            if (!nativeWoundedDown && !(persistentlyDown && !ped.IsDead))
+                return false;
+
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id)) return false;
+
+            // Use RDR2's native incapacitated-revive interaction so the rescuer and the wounded
+            // recruit can play the game's paired recovery animation. Never use RESURRECT_PED:
+            // if the game no longer recognizes the native wound state, a death is final.
+            bool nativeStarted = TryInvokeNativeWrapper(typeof(PED), "_INCAPACITATED_REVIVE",
+                new object[] { ped.Handle, helperPed.Handle });
+            if (!nativeStarted)
             {
-                if (!TryInvokeNativeWrapper(typeof(PED), "RESURRECT_PED", new object[] { ped.Handle }))
+                if (ped.IsDead)
                 {
-                    InvokeInstance(instance, "ShowSubtitle", "No se pudo reanimar al compañero con los nativos disponibles.");
-                    Log("RESURRECT_PED wrapper unavailable while helping " + (GetMember(record, "Id") as string ?? "companion") + ".");
-                    return;
+                    InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
+                    Log("Native incapacitated revive unavailable for " + id + "; did not resurrect dead ped.");
+                    return false;
+                }
+
+                bool stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true });
+                if (!stood) stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle });
+                if (!stood)
+                {
+                    InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
+                    return false;
                 }
             }
 
@@ -2431,48 +2480,41 @@ namespace EnRAGECompanionsExtension
             try { maxHealth = ped.MaxHealth; } catch { }
             if (maxHealth <= 0) maxHealth = 100;
             int recoveryHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
-            try
+            if (!ped.IsDead)
             {
-                int currentHealth = ped.Health;
-                if (currentHealth < recoveryHealth)
-                    ped.Health = recoveryHealth;
-            }
-            catch (Exception ex)
-            {
-                Log("Could not restore health while helping incapacitated companion: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo restaurar la salud; el compañero sigue incapacitado.");
-                return;
-            }
-
-            // Do not clear the persisted incapacitation state unless reanimation and health
-            // restoration have actually taken effect on the live entity.
-            try
-            {
-                if (!ped.Exists() || ped.IsDead || ped.Health <= 0)
+                try
                 {
-                    InvokeInstance(instance, "ShowSubtitle", "El compañero todavía no puede levantarse; sigue incapacitado.");
-                    return;
+                    if (ped.Health < recoveryHealth) ped.Health = recoveryHealth;
+                    if (!ped.Exists() || ped.IsDead || ped.Health <= 0)
+                    {
+                        InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
+                        return false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("Could not restore health while helping incapacitated companion: " + Unwrap(ex));
+                    return false;
                 }
             }
-            catch (Exception ex)
+            else
             {
-                Log("Could not verify companion recovery: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo verificar la recuperación; el compañero sigue incapacitado.");
-                return;
+                // The native interaction may start asynchronously. Leave the state persisted and
+                // let enRAGE/game finish the wounded-down recovery instead of forcing a resurrection.
+                return true;
             }
 
-            try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
-            bool stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true });
-            if (!stood) stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle });
-            if (!stood)
+            try
             {
-                // Keep the record and roster membership even on API builds without TASK_STAND_UP.
-                TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, 900 });
-                Log("TASK_STAND_UP wrapper unavailable; companion health was restored but the get-up animation may be omitted.");
+                if (!nativeStarted)
+                {
+                    if (!TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true }))
+                        TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, 900 });
+                }
             }
+            catch { }
 
-            string id = GetMember(record, "Id") as string;
-            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) state = GetPersistentState(record, true);
             if (state != null && state.Injury != null)
             {
                 state.Injury.IsIncapacitated = false;
@@ -2489,16 +2531,106 @@ namespace EnRAGECompanionsExtension
                 SetField(companion, "State", 0);
                 SetField(companion, "AskedAt", Game.GameTime);
             }
-            if (!string.IsNullOrWhiteSpace(id))
-            {
-                LastObservedHealthById[id] = ped.Health;
-                LastDamageBaselineById[id] = ped.Health;
-                LastHealthSampleAtById[id] = Game.GameTime;
-                LastDamageAtById.Remove(id);
-                LastInjuryRecoveryAtById[id] = Game.GameTime;
-            }
+            LastObservedHealthById[id] = ped.Health;
+            LastDamageBaselineById[id] = ped.Health;
+            LastHealthSampleAtById[id] = Game.GameTime;
+            LastDamageAtById.Remove(id);
+            LastInjuryRecoveryAtById[id] = Game.GameTime;
+            RecoveryAnimationUntilById[id] = Game.GameTime + 2200;
+            LastAutoAssistAtById[id] = Game.GameTime + 8000;
+
+            object helperRecord = GetTrackedRecord(instance, helperPed.Handle);
+            string helperId = GetMember(helperRecord, "Id") as string;
+            if (!string.IsNullOrWhiteSpace(helperId))
+                RecoveryAnimationUntilById[helperId] = Game.GameTime + 2200;
+
             try { InvokeInstance(instance, "SaveRoster"); } catch { }
             InvokeInstance(instance, "ShowSubtitle", TF("incapacitated.helped", GetMember(record, "Name") as string ?? T("companion.default")));
+            return true;
+        }
+
+        private static void TryAutoAssistIncapacitatedCompanions(object instance, Ped player, object[] companions)
+        {
+            if (instance == null || player == null || !player.Exists() || player.IsInCombat || companions == null ||
+                companions.Length == 0)
+                return;
+
+            // The entire active group must be out of combat before companions attempt medical aid.
+            foreach (object companion in companions)
+            {
+                string key = GetField(companion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                    continue;
+                Ped memberPed = GetField(companion, "Ped") as Ped;
+                if (memberPed == null || !memberPed.Exists()) memberPed = GetField(companion, "Real") as Ped;
+                if (memberPed != null && memberPed.Exists() && !memberPed.IsDead && memberPed.IsInCombat)
+                    return;
+            }
+
+            int now = Game.GameTime;
+            foreach (object downedCompanion in companions)
+            {
+                string key = GetField(downedCompanion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                    continue;
+                object record = GetField(downedCompanion, "Rec");
+                if (record == null || IsExiledRosterRecord(record) ||
+                    !(GetMember(record, "IsAlive") is bool alive) || !alive)
+                    continue;
+
+                Ped target = GetField(downedCompanion, "Ped") as Ped;
+                if (target == null || !target.Exists()) target = GetField(downedCompanion, "Real") as Ped;
+                if (target == null || !target.Exists()) continue;
+
+                CompanionPersistentState targetState = GetPersistentState(record, false);
+                bool downed = IsNativeWoundedDown(instance, target) ||
+                    (targetState != null && targetState.Injury != null &&
+                     targetState.Injury.IsIncapacitated && !target.IsDead);
+                if (!downed) continue;
+
+                string id = GetMember(record, "Id") as string;
+                if (string.IsNullOrWhiteSpace(id)) continue;
+                int nextAllowed;
+                if (LastAutoAssistAtById.TryGetValue(id, out nextAllowed) && now < nextAllowed) continue;
+
+                object bestHelper = null;
+                Ped bestHelperPed = null;
+                float bestDistance = 2.35f;
+                foreach (object candidate in companions)
+                {
+                    if (object.ReferenceEquals(candidate, downedCompanion)) continue;
+                    string helperKey = GetField(candidate, "Key") as string;
+                    if (string.IsNullOrWhiteSpace(helperKey) || !helperKey.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                        GetFieldInt(candidate, "State", 2) == 2)
+                        continue;
+                    object helperRecord = GetField(candidate, "Rec");
+                    if (helperRecord == null || IsExiledRosterRecord(helperRecord) ||
+                        !(GetMember(helperRecord, "IsAlive") is bool helperAlive) || !helperAlive)
+                        continue;
+                    Ped helper = GetField(candidate, "Ped") as Ped;
+                    if (helper == null || !helper.Exists()) helper = GetField(candidate, "Real") as Ped;
+                    if (helper == null || !helper.Exists() || helper.IsDead || helper.IsInCombat || helper.IsOnMount ||
+                        IsNativeWoundedDown(instance, helper) || IsRosterRecordIncapacitated(helperRecord))
+                        continue;
+                    float distance;
+                    try { distance = target.Position.DistanceTo(helper.Position); }
+                    catch { continue; }
+                    if (distance <= bestDistance)
+                    {
+                        bestDistance = distance;
+                        bestHelper = candidate;
+                        bestHelperPed = helper;
+                    }
+                }
+
+                if (bestHelperPed == null) continue;
+                LastAutoAssistAtById[id] = now + 10000;
+                if (HelpIncapacitatedCompanion(instance, record, target, bestHelperPed))
+                {
+                    Log("Nearby recruit started wound assistance for " + id + " using " +
+                        (GetMember(GetField(bestHelper, "Rec"), "Id") as string ?? "another recruit") + ".");
+                }
+            }
         }
 
         private static void UpdateCombatStancePrompt(object instance, Ped player)
@@ -2798,6 +2930,13 @@ namespace EnRAGECompanionsExtension
                 if (string.IsNullOrEmpty(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
                     return true;
 
+                object recruitedRecord = GetField(companion, "Rec");
+                if (IsRosterRecordIncapacitated(recruitedRecord))
+                {
+                    InvokeInstance(__instance, "ShowSubtitle", T("incapacitated.only_help"));
+                    return false;
+                }
+
                 string why = __args[1] as string;
                 if (string.Equals(why, "back at camp", StringComparison.OrdinalIgnoreCase))
                 {
@@ -2842,6 +2981,11 @@ namespace EnRAGECompanionsExtension
                 object existingCompanion = FindCompanionByKey(__instance, key);
                 if (existingCompanion != null)
                 {
+                    if (IsRosterRecordIncapacitated(GetField(existingCompanion, "Rec")))
+                    {
+                        InvokeInstance(__instance, "ShowSubtitle", T("incapacitated.only_help"));
+                        return false;
+                    }
                     DismissRecruitedCompanion(__instance, existingCompanion);
                     return false;
                 }
@@ -4335,6 +4479,11 @@ namespace EnRAGECompanionsExtension
         private static void DismissRecruitedCompanion(object instance, object companion)
         {
             if (companion == null) return;
+            if (IsRosterRecordIncapacitated(GetField(companion, "Rec")))
+            {
+                InvokeInstance(instance, "ShowSubtitle", T("incapacitated.only_help"));
+                return;
+            }
             string name = GetField(companion, "Name") as string ?? "Tu aliado";
             string key = GetField(companion, "Key") as string;
             Ped ped = GetField(companion, "Ped") as Ped;
@@ -4459,6 +4608,13 @@ namespace EnRAGECompanionsExtension
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             if (ped == null || !ped.Exists()) return false;
 
+            int recoveryUntil;
+            if (!string.IsNullOrWhiteSpace(id) && RecoveryAnimationUntilById.TryGetValue(id, out recoveryUntil))
+            {
+                if (Game.GameTime < recoveryUntil) return true;
+                RecoveryAnimationUntilById.Remove(id);
+            }
+
             CompanionPersistentState state = GetPersistentState(record, true);
             if (state == null || state.Injury == null) return false;
             if (state.Injury.IsIncapacitated)
@@ -4485,7 +4641,7 @@ namespace EnRAGECompanionsExtension
                 LastDamageBaselineById[id] = health;
             }
 
-            if (IsLikelyIncapacitated(record, ped, id))
+            if (IsLikelyIncapacitated(instance, record, ped, id))
             {
                 TryEnterIncapacitated(instance, record, ped);
                 LastObservedHealthById[id] = Math.Max(1, health);
@@ -4593,10 +4749,14 @@ namespace EnRAGECompanionsExtension
                     Log("Companion injury recovery completed for " + id + ".");
             }
         }
-        private static bool IsLikelyIncapacitated(object record, Ped ped, string id)
+        private static bool IsLikelyIncapacitated(object instance, object record, Ped ped, string id)
         {
             if (ped == null || !ped.Exists()) return false;
-            try { if (ped.IsIncapacitated) return true; } catch { }
+            if (IsNativeWoundedDown(instance, ped)) return true;
+            if (_woundedDown == null)
+            {
+                try { if (ped.IsIncapacitated) return true; } catch { }
+            }
             // Some RDR2 ped types do not expose IsRagdoll reliably while going down.
             // A recently damaged recruit at or below 20% health should still enter the recoverable
             // incapacitated state; TryEnterIncapacitated applies the knocked-out task when possible.
@@ -4612,33 +4772,61 @@ namespace EnRAGECompanionsExtension
                     return true;
             }
             CompanionPersistentState state = GetPersistentState(record, false);
-            if (state != null && state.Injury != null && state.Injury.IsIncapacitated && ped.IsDead)
-                return true;
             if (ped.IsDead)
             {
-                try { if (TryStaticBool("LooksKnockedOut", ped)) return true; } catch { }
-            }
-            if (ped.IsDead && ped.IsRagdoll)
-            {
-                int last;
-                if (!string.IsNullOrWhiteSpace(id) && LastDamageAtById.TryGetValue(id, out last) &&
-                    Game.GameTime >= last && Game.GameTime - last <= 10000)
+                // A dead ped is recoverable only while enRAGE still recognizes its native
+                // wound-incapacitation state. Do not turn an ordinary death into a revive.
+                if (_woundedDown == null)
                 {
                     try { if (TryStaticBool("LooksKnockedOut", ped)) return true; } catch { }
                 }
+                return false;
             }
+            if (state != null && state.Injury != null && state.Injury.IsIncapacitated &&
+                (ped.IsIncapacitated || ped.IsRagdoll)) return true;
             return false;
+        }
+
+        private static bool IsNativeWoundedDown(object instance, Ped ped)
+        {
+            if (ped == null || !ped.Exists()) return false;
+            if (_woundedDown != null)
+            {
+                object owner = instance ?? _latestMainInstance;
+                if (owner == null) return false;
+                try { return _woundedDown.Invoke(owner, new object[] { ped }) is bool down && down; }
+                catch (Exception ex) { Log("Native WoundedDown check failed: " + Unwrap(ex)); return false; }
+            }
+            try
+            {
+                if (ped.IsIncapacitated && (!ped.IsDead || TryStaticBool("LooksKnockedOut", ped))) return true;
+            }
+            catch { }
+            return false;
+        }
+
+        private static bool IsRosterRecordIncapacitated(object record)
+        {
+            if (record == null) return false;
+            CompanionPersistentState state = GetPersistentState(record, false);
+            return state != null && state.Injury != null && state.Injury.IsIncapacitated;
         }
 
         private static bool IsPedIncapacitatedRecruit(Ped ped)
         {
             if (ped == null || !ped.Exists()) return false;
-            try { if (ped.IsIncapacitated) return true; } catch { }
             CachedRosterRecord cached;
             if (!RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cached) || cached == null || cached.Record == null)
+            {
+                if (_woundedDown == null) try { return ped.IsIncapacitated; } catch { }
                 return false;
+            }
+            if (IsNativeWoundedDown(_latestMainInstance, ped)) return true;
             CompanionPersistentState state = GetPersistentState(cached.Record, false);
-            return state != null && state.Injury != null && state.Injury.IsIncapacitated;
+            if (state != null && state.Injury != null && state.Injury.IsIncapacitated)
+                return !ped.IsDead || IsNativeWoundedDown(_latestMainInstance, ped);
+            if (_woundedDown == null) try { return ped.IsIncapacitated; } catch { }
+            return false;
         }
         private static bool TryEnterIncapacitated(object instance, object record, Ped ped)
         {
@@ -4708,7 +4896,7 @@ namespace EnRAGECompanionsExtension
                 if (ped == null || !ped.Exists() || !ped.IsDead)
                     return;
                 string recordId = GetMember(record, "Id") as string;
-                if (IsLikelyIncapacitated(record, ped, recordId) || ped.IsDead)
+                if (IsLikelyIncapacitated(instance, record, ped, recordId))
                 {
                     TryEnterIncapacitated(instance, record, ped);
                     return;
@@ -5013,6 +5201,8 @@ namespace EnRAGECompanionsExtension
                 { "companion.recruited", "{0} ahora combate de tu lado." },
                 { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
                 { "incapacitated.prompt", "Ayudar a levantarse" },
+                { "incapacitated.only_help", "Está incapacitado por una herida. La única interacción disponible es ayudarlo a levantarse." },
+                { "incapacitated.revive_unavailable", "No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado." },
                 { "incapacitated.resurrect_failed", "No se pudo reanimar al compañero con los nativos disponibles." },
                 { "incapacitated.health_failed", "No se pudo restaurar la salud; el compañero sigue incapacitado." },
                 { "incapacitated.still_down", "El compañero todavía no puede levantarse; sigue incapacitado." },
