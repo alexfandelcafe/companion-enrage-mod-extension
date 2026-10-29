@@ -75,13 +75,17 @@ RecruitMedicineCostCents=100
 - `EnableWaitMode`: controls `Quédate aquí`; when enabled the companion returns to the saved anchor if it exceeds `WaitRadius`, then remains there instead of running enRAGE's default follow task.
 - `WaitRadius`: radius in metres around the saved wait position (clamped to 1–50 m; default 8).
 - `EnableInjurySystem`: enables limited health-delta detection for active recruited companions; it does not infer injury from every animation or visible wound.
-- `InjuryDamageThresholdPercent`: minimum single observed health loss as a percentage of max health required to register an injury (1–50; default 10).
+- `InjuryDamageThresholdPercent`: cumulative health loss from the tracked baseline, as a percentage of max health, required to register an injury (1–50; default 10).
 - `InjuryRecoverySeconds`: injury recovery countdown in seconds (15–86400; default 180), persisted periodically.
 - `IncapacitatedHealthPercent`: health restored during an attempted incapacitation recovery (10–75; default 35).
 - `MedicineHealingPercent`: percentage of max health added by a paid treatment (1–100; default 100, capped at max health).
 - `MedicineRecoveryReductionSeconds`: recovery time removed by a treatment (0–86400; default 60).
 - `RecruitMedicineCostCents`: treatment price in cents (0–100000; default 100 = $1.00). A short per-record transaction window guards against duplicate prompt activations.
 - `KeepPlayerSideAfterDismissal`: deprecated. Dismissed extension recruits stay on the player's friendly relationship side regardless of their enRAGE faction.
+
+## Translating extension text
+
+On first launch, the extension creates `scripts/EnRAGECompanionsExtension.texts.ini` with editable labels and messages. Change only the text after the first `=`; leave the keys unchanged. Keep placeholders such as `{0}`, `{1}`, `{2}` and `${0}` intact in formatted messages. Missing keys are appended automatically when the extension updates, and blank/invalid entries fall back to the built-in Spanish text. Restart the game/script after editing so the catalog reloads. The repository also contains `EnRAGECompanionsExtension.texts.ini.example` as a template.
 
 ## Scope and verification
 
@@ -139,14 +143,14 @@ La rama `phase2-persistent-companion-state` añade persistencia versionada por I
 - `src/CompanionStateRuntime.cs`: inicializa el almacén al arrancar el script sin introducir una referencia a `NemesisMod.dll`.
 - `src/EntryPoint.cs`: inicializa el almacén al construir el script.
 
-Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Los datos se guardan por ID estable del registro, nunca por el handle temporal del ped. El esquema nuevo es la versión 3 y sigue leyendo el esquema versionado anterior; los campos de funciones retiradas dejan de usarse y no se vuelven a guardar. El formato de desarrollo `{"Version":1,"Records":[...]}` conserva los datos antiguos de orden, postura, montura, posición, lesión, temporizador de descanso y afinidad. Si existe un archivo auxiliar de versiones anteriores, el código nuevo lo ignora y no lo elimina del disco.
+Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Los datos se guardan por ID estable del registro, nunca por el handle temporal del ped. El esquema nuevo es la versión 3 y sigue leyendo el esquema versionado anterior; los campos de funciones retiradas dejan de usarse y no se vuelven a guardar. El formato de desarrollo `{"Version":1,"Records":[...]}` conserva los datos antiguos de orden, postura, montura, posición, lesión y afinidad; el antiguo estado/temporizador de descanso se normaliza a seguimiento y no se migra como función activa. Si existe un archivo auxiliar de versiones anteriores, el código nuevo lo ignora y no lo elimina del disco.
 
-## Fase 3 — órdenes individuales y descanso
+## Fase 3 — órdenes individuales y espera
 
 La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de sustituir el sistema de reclutamiento. Al apuntar a un compañero activo aparecen prompts contextuales:
 
 - `Quédate aquí`: guarda la posición actual del compañero, lo baja del caballo si corresponde y mantiene su IA de espera separada del ciclo `WaitToJoin/Ride`. Si sale del radio configurado, recibe una tarea para regresar al punto guardado.
-- `Sígueme`: elimina el anclaje de espera/descanso, restablece el estado persistente a `Following` y devuelve el control de movimiento al ciclo normal de enRAGE.
+- `Sígueme`: elimina el anclaje de espera, restablece el estado persistente a `Following` y devuelve el control de movimiento al ciclo normal de enRAGE.
 - La orden de descanso se retiró después de un cierre del juego reportado al activarla. La orden `Quédate aquí` sigue disponible.
 - Los prompts de órdenes son contextuales y no se agregan botones a la ficha. En espera el wrapper permanece en `State=1` para conservar el prompt G nativo, y el controlador bloquea la tarea `Ride` que sobrescribiría la orden. La orden se guarda por ID estable; `Llamarlo` vuelve a `Following`.
 - Los registros nuevos y antiguos de la extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE, por lo que no sirve como origen neutral. Los registros con un contador real de muertes no se alteran.
