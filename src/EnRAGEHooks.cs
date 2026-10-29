@@ -5257,7 +5257,6 @@ namespace EnRAGECompanionsExtension
                 { "incapacitated.prompt", "Ayudar a levantarse" },
                 { "incapacitated.only_help", "Está incapacitado por una herida. La única interacción disponible es ayudarlo a levantarse." },
                 { "incapacitated.revive_unavailable", "No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado." },
-                { "incapacitated.resurrect_failed", "No se pudo reanimar al compañero con los nativos disponibles." },
                 { "incapacitated.health_failed", "No se pudo restaurar la salud; el compañero sigue incapacitado." },
                 { "incapacitated.still_down", "El compañero todavía no puede levantarse; sigue incapacitado." },
                 { "incapacitated.verify_failed", "No se pudo verificar la recuperación; el compañero sigue incapacitado." },
