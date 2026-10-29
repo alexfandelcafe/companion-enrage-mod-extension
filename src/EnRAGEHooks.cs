@@ -4577,7 +4577,10 @@ namespace EnRAGECompanionsExtension
         {
             if (ped == null || !ped.Exists()) return false;
             try { if (ped.IsIncapacitated) return true; } catch { }
-            if (!ped.IsDead && ped.IsRagdoll && _enableInjurySystem)
+            // Some RDR2 ped types do not expose IsRagdoll reliably while going down.
+            // A recently damaged recruit at or below 20% health should still enter the recoverable
+            // incapacitated state; TryEnterIncapacitated applies the knocked-out task when possible.
+            if (!ped.IsDead && _enableInjurySystem)
             {
                 int lastDamage, maxHealth = 1, health = 0;
                 try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
