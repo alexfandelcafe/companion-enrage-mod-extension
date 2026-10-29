@@ -63,7 +63,6 @@ namespace EnRAGECompanionsExtension
         // reload (R), and context-yes (E). Do not reuse E for normal orders: this was competing with
         // the game's native interaction prompt on some target groups and made the G action disappear.
         private const int IndividualOrderPromptControl = unchecked((int)0xDFF812F9); // F / context-no
-        private const int IndividualRestPromptControl = unchecked((int)0x6D1319BE); // R / reload
         private const int IncapacitatedPromptControl = unchecked((int)0xCEFD9220); // E while orders are hidden
         private const int CombatStancePromptControl = -2074855166; // H; medicine prompt is hidden during combat
         private static int _incapacitatedPrompt;
@@ -83,11 +82,6 @@ namespace EnRAGECompanionsExtension
         private static bool _individualOrderPromptArmed;
         private static Ped _individualOrderPromptPed;
         private static string _individualOrderPromptLabel;
-        private static int _individualRestPrompt;
-        private static int _individualRestPromptFor;
-        private static int _individualRestPromptGroup;
-        private static bool _individualRestPromptArmed;
-        private static Ped _individualRestPromptPed;
         private static int _maxCompanions = 3;
         // Default affiliation is Van der Linde for compatibility. Both settings can target an
         // existing faction in enRAGE; the player-friendly relationship group is independent of it.
@@ -103,14 +97,12 @@ namespace EnRAGECompanionsExtension
         private static bool _enableIndividualOrders = true;
         private static bool _enableWaitMode = true;
         private static float _waitRadius = 8.0f;
-        private static int _restDurationSeconds = 60;
         private static bool _enableInjurySystem = true;
         private static int _injuryDamageThresholdPercent = 10;
         private static int _injuryRecoverySeconds = 180;
         private static int _incapacitatedHealthPercent = 35;
         private static int _medicineHealingPercent = 100;
         private static int _medicineRecoveryReductionSeconds = 60;
-        private static bool _restHealsInjuries = true;
         private static int _recruitMedicineCostCents = 100;
         private static readonly Dictionary<string, int> LastIndividualOrderTaskAt =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -129,8 +121,6 @@ namespace EnRAGECompanionsExtension
         private static int _lastPlayerWeaponFireAt = -100000;
         private static readonly Dictionary<string, int> LastMedicineTransactionAt =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly HashSet<string> RestScenarioStartedIds =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastPlayerFireAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastResurrectionAttemptAtById =
@@ -815,43 +805,36 @@ namespace EnRAGECompanionsExtension
             }
             return null;
         }
-
         private static void SetPersistentFollowState(object record, CompanionFollowState followState, Ped anchorPed)
         {
             CompanionPersistentState state = GetPersistentState(record, true);
             if (state == null) return;
+            if (followState == CompanionFollowState.Resting)
+                followState = CompanionFollowState.Following;
 
             state.FollowState = followState;
-            if (followState == CompanionFollowState.Waiting || followState == CompanionFollowState.Resting)
+            if (followState == CompanionFollowState.Waiting)
             {
                 Ped anchor = anchorPed;
-                if (anchor == null || !anchor.Exists())
-                    anchor = Game.Player.Character;
+                if (anchor == null || !anchor.Exists()) anchor = Game.Player.Character;
                 if (anchor != null && anchor.Exists())
                 {
-                    var position = anchor.Position;
+                    var pos = anchor.Position;
                     state.SavedPosition.HasValue = true;
-                    state.SavedPosition.X = position.X;
-                    state.SavedPosition.Y = position.Y;
-                    state.SavedPosition.Z = position.Z;
+                    state.SavedPosition.X = pos.X;
+                    state.SavedPosition.Y = pos.Y;
+                    state.SavedPosition.Z = pos.Z;
                     try { state.SavedPosition.Heading = anchor.Heading; } catch { state.SavedPosition.Heading = 0f; }
                 }
-                if (followState == CompanionFollowState.Resting)
-                    state.RestStartedUtcTicks = DateTime.UtcNow.Ticks;
-                else
-                    state.RestStartedUtcTicks = 0;
             }
-            else
-            {
-                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
-                state.RestStartedUtcTicks = 0;
-            }
+            else if (state.SavedPosition != null)
+                state.SavedPosition.HasValue = false;
             SavePersistentState(state);
         }
-
         private static void SetIndividualCompanionOrder(object instance, object record, CompanionFollowState order)
         {
             if (instance == null || record == null || !_enableIndividualOrders) return;
+            if (order != CompanionFollowState.Waiting && order != CompanionFollowState.Following) return;
             if (order == CompanionFollowState.Waiting && !_enableWaitMode)
             {
                 InvokeInstance(instance, "ShowSubtitle", "El modo de espera está desactivado en el archivo INI.");
@@ -865,7 +848,6 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(instance, "ShowSubtitle", "Primero debes llamar a este compañero desde el roster.");
                 return;
             }
-
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             if (ped == null || !ped.Exists() || ped.IsDead)
@@ -876,46 +858,39 @@ namespace EnRAGECompanionsExtension
 
             SetPersistentFollowState(record, order, ped);
             LastIndividualOrderTaskAt.Remove(id ?? string.Empty);
+            try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
             if (order == CompanionFollowState.Following)
             {
-                RestScenarioStartedIds.Remove(id ?? string.Empty);
-                try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
                 SetField(companion, "State", 0);
                 SetField(companion, "AskedAt", Game.GameTime);
                 InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") + " vuelve a seguirte.");
+                return;
             }
-            else
-            {
-                RestScenarioStartedIds.Remove(id ?? string.Empty);
-                try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
-                if (ped.IsOnMount)
-                {
-                    try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
-                }
-                // enRAGE only creates its stock G prompt when the companion wrapper is State=1.
-                // Keep the wrapper active so Dejar de seguirme remains available; the cycle controller
-                // suppresses Ride and applies our hold/rest task instead of letting it mount/follow.
-                SetField(companion, "State", 1);
-                SetField(companion, "AskedAt", Game.GameTime);
-                InvokeInstance(instance, "ShowSubtitle", order == CompanionFollowState.Waiting
-                    ? (GetMember(record, "Name") as string ?? "Tu compañero") + " esperará aquí."
-                    : (GetMember(record, "Name") as string ?? "Tu compañero") + " descansará durante " + _restDurationSeconds + " segundos.");
-            }
+            if (ped.IsOnMount)
+                try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
+            SetField(companion, "State", 1);
+            SetField(companion, "AskedAt", Game.GameTime);
+            InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") + " esperará aquí.");
         }
-
         private static bool MaintainIndividualCompanionOrder(object instance, object companion, Ped player)
         {
             if (!_enableIndividualOrders || companion == null) return false;
             string key = GetField(companion, "Key") as string;
-            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
-                return false;
-
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return false;
             object record = GetField(companion, "Rec");
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return false;
             CompanionPersistentState state = GetPersistentState(record, false);
             if (state == null) return false;
 
+            // Migrate a saved Resting state from old builds to normal Following.
+            if (state.FollowState == CompanionFollowState.Resting)
+            {
+                state.FollowState = CompanionFollowState.Following;
+                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
+                SavePersistentState(state);
+                return false;
+            }
             if (state.FollowState == CompanionFollowState.Waiting && !_enableWaitMode)
             {
                 state.FollowState = CompanionFollowState.Following;
@@ -923,75 +898,32 @@ namespace EnRAGECompanionsExtension
                 SavePersistentState(state);
                 return false;
             }
-
-            if (state.FollowState != CompanionFollowState.Waiting && state.FollowState != CompanionFollowState.Resting)
-                return false;
+            if (state.FollowState != CompanionFollowState.Waiting) return false;
 
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
-            if (ped == null || !ped.Exists() || ped.IsDead)
-                return true; // Do not let enRAGE's stock task run over a persisted hold/rest order.
-
-            if (state.FollowState == CompanionFollowState.Resting)
-            {
-                if (state.RestStartedUtcTicks <= 0)
-                {
-                    state.RestStartedUtcTicks = DateTime.UtcNow.Ticks;
-                    SavePersistentState(state);
-                }
-                double elapsed = (DateTime.UtcNow.Ticks - state.RestStartedUtcTicks) / (double)TimeSpan.TicksPerSecond;
-                if (elapsed >= _restDurationSeconds)
-                {
-                    state.FollowState = CompanionFollowState.Following;
-                    state.RestStartedUtcTicks = 0;
-                    if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
-                    if (_restHealsInjuries && state.Injury != null)
-                    {
-                        state.Injury.IsInjured = false;
-                        state.Injury.Severity = 0;
-                        state.Injury.RecoverySecondsRemaining = 0;
-                        state.Injury.FirstInjuredUtcTicks = 0;
-                    }
-                    SavePersistentState(state);
-                    if (_restHealsInjuries) HealPedToMaximum(ped);
-                    RestScenarioStartedIds.Remove(id);
-                    LastIndividualOrderTaskAt.Remove(id);
-                    SetField(companion, "State", 0);
-                    SetField(companion, "AskedAt", Game.GameTime);
-                    try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
-                    InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") + " terminó de descansar y vuelve a seguirte.");
-                    return false;
-                }
-            }
-
+            if (ped == null || !ped.Exists() || ped.IsDead) return true;
             MaintainAnchoredCompanionTask(id, ped, state);
             return true;
         }
-
         private static void MaintainAnchoredCompanionTask(string id, Ped ped, CompanionPersistentState state)
         {
             if (ped == null || !ped.Exists() || state == null) return;
             if (state.SavedPosition == null) state.SavedPosition = new CompanionSavedPosition();
             if (!state.SavedPosition.HasValue)
             {
-                var position = ped.Position;
+                var pos = ped.Position;
                 state.SavedPosition.HasValue = true;
-                state.SavedPosition.X = position.X;
-                state.SavedPosition.Y = position.Y;
-                state.SavedPosition.Z = position.Z;
+                state.SavedPosition.X = pos.X; state.SavedPosition.Y = pos.Y; state.SavedPosition.Z = pos.Z;
                 try { state.SavedPosition.Heading = ped.Heading; } catch { state.SavedPosition.Heading = 0f; }
                 SavePersistentState(state);
             }
 
-            int now = Game.GameTime;
-            int last;
-            if (LastIndividualOrderTaskAt.TryGetValue(id, out last) && now >= last && now - last < 1400)
-                return;
+            int now = Game.GameTime, last;
+            if (LastIndividualOrderTaskAt.TryGetValue(id, out last) && now >= last && now - last < 1400) return;
             LastIndividualOrderTaskAt[id] = now;
-
             if (ped.IsOnMount)
             {
-                RestScenarioStartedIds.Remove(id);
                 try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
                 return;
             }
@@ -999,65 +931,14 @@ namespace EnRAGECompanionsExtension
             float dx = ped.Position.X - state.SavedPosition.X;
             float dy = ped.Position.Y - state.SavedPosition.Y;
             float dz = ped.Position.Z - state.SavedPosition.Z;
-            float distance = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            if (distance > _waitRadius)
+            if ((float)Math.Sqrt(dx * dx + dy * dy + dz * dz) > _waitRadius)
             {
-                RestScenarioStartedIds.Remove(id);
-                if (!TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD", new object[] {
-                    ped.Handle, state.SavedPosition.X, state.SavedPosition.Y, state.SavedPosition.Z,
-                    1.0f, 10000, state.SavedPosition.Heading, 1.0f }))
-                    Log("The TASK_GO_STRAIGHT_TO_COORD wrapper was unavailable; held companion " + id + " could not return to its saved position.");
+                if (!TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD", new object[] { ped.Handle, state.SavedPosition.X, state.SavedPosition.Y, state.SavedPosition.Z, 1.0f, 10000, state.SavedPosition.Heading, 1.0f }))
+                    Log("TASK_GO_STRAIGHT_TO_COORD wrapper unavailable; held companion " + id + " could not return.");
             }
-            else if (state.FollowState == CompanionFollowState.Resting)
-            {
-                // Start a genuine in-world rest scenario once. Reissuing STAND_STILL every tick
-                // cancels scenario tasks, which made Descansar look as though it did nothing.
-                if (!RestScenarioStartedIds.Contains(id))
-                {
-                    if (TryStartCompanionRestScenario(ped))
-                        RestScenarioStartedIds.Add(id);
-                    else
-                    {
-                        Log("No compatible resting scenario wrapper was found for " + id + "; using a passive wait task.");
-                        if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
-                            TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
-                    }
-                }
-            }
-            else
-            {
-                RestScenarioStartedIds.Remove(id);
-                if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
-                    TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
-            }
+            else if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
+                TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
         }
-
-        private static bool TryStartCompanionRestScenario(Ped ped)
-        {
-            if (ped == null || !ped.Exists() || ped.IsDead) return false;
-            // ScriptHook API versions differ on optional scenario parameters. Try known wrapper
-            // signatures reflectively; unsupported APIs degrade to a passive wait, not recruitment loss.
-            object[] fourArgs = new object[] { ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1, true };
-            if (TryInvokeNativeWrapper(typeof(TASK), "TASK_START_SCENARIO_IN_PLACE", fourArgs))
-                return true;
-            object[] sevenArgs = new object[] { ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1, true, false, 0, false };
-            if (TryInvokeNativeWrapper(typeof(TASK), "TASK_START_SCENARIO_IN_PLACE", sevenArgs))
-                return true;
-            // Some ScriptHook builds do not expose the wrapper despite the native being available.
-            // Use the RDR2 native as a final fallback, with the full native signature.
-            try
-            {
-                Function.Call(0x142A02425FF02BD9UL, new InputArgument[] {
-                    ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1, true, false, 0, false });
-                return true;
-            }
-            catch (Exception ex) { Log("Direct resting scenario native failed: " + Unwrap(ex)); }
-            object[] threeArgs = new object[] { ped.Handle, "WORLD_HUMAN_SIT_GROUND", -1 };
-            if (TryInvokeNativeWrapper(typeof(TASK), "TASK_START_SCENARIO_IN_PLACE", threeArgs))
-                return true;
-            return false;
-        }
-
         private static bool TryInvokeNativeWrapper(Type nativeType, string methodName, object[] args)
         {
             try
@@ -2381,12 +2262,10 @@ namespace EnRAGECompanionsExtension
                     HideIndividualOrderPrompts();
                     return;
                 }
-
                 Ped target = FindAimedRecruitedPed(instance, player);
                 CachedRosterRecord cached;
-                if (target == null || !target.Exists() ||
-                    !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
-                    cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
+                if (target == null || !target.Exists() || !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) ||
+                    cached == null || cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
                     IsExiledRosterRecord(cached.Record) || !IsRosterRecordCurrentlyFollowing(instance, cached.Record))
                 {
                     HideIndividualOrderPrompts();
@@ -2394,25 +2273,16 @@ namespace EnRAGECompanionsExtension
                 }
 
                 CompanionPersistentState state = GetPersistentState(cached.Record, true);
-                if (IsPedIncapacitatedRecruit(target) ||
-                    (state != null && state.Injury != null && state.Injury.IsIncapacitated))
+                if (IsPedIncapacitatedRecruit(target) || (state != null && state.Injury != null && state.Injury.IsIncapacitated))
                 {
                     HideIndividualOrderPrompts();
                     return;
                 }
                 CompanionFollowState current = state == null ? CompanionFollowState.Following : state.FollowState;
-                CompanionFollowState primaryOrder = current == CompanionFollowState.Following
-                    ? CompanionFollowState.Waiting : CompanionFollowState.Following;
-                string primaryLabel = primaryOrder == CompanionFollowState.Waiting ? "Quédate aquí" : "Sígueme";
+                CompanionFollowState next = current == CompanionFollowState.Following ? CompanionFollowState.Waiting : CompanionFollowState.Following;
+                string label = next == CompanionFollowState.Waiting ? "Quédate aquí" : "Sígueme";
                 int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
-                UpdateIndividualOrderPrompt(instance, target, group, primaryLabel, IndividualOrderPromptControl,
-                    primaryOrder, true, cached.Record);
-
-                if (current == CompanionFollowState.Resting)
-                    HideIndividualOrderPrompt(false);
-                else
-                    UpdateIndividualOrderPrompt(instance, target, group, "Descansar", IndividualRestPromptControl,
-                        CompanionFollowState.Resting, false, cached.Record);
+                UpdateIndividualOrderPrompt(instance, target, group, label, IndividualOrderPromptControl, next, cached.Record);
             }
             catch (Exception ex)
             {
@@ -2420,80 +2290,51 @@ namespace EnRAGECompanionsExtension
                 Log("Individual order prompt failed: " + Unwrap(ex));
             }
         }
-
         private static void UpdateIndividualOrderPrompt(object instance, Ped target, int group, string label,
-            int control, CompanionFollowState order, bool primary, object record)
+            int control, CompanionFollowState order, object record)
         {
-            int prompt = primary ? _individualOrderPrompt : _individualRestPrompt;
-            int promptFor = primary ? _individualOrderPromptFor : _individualRestPromptFor;
-            int promptGroup = primary ? _individualOrderPromptGroup : _individualRestPromptGroup;
-            bool armed = primary ? _individualOrderPromptArmed : _individualRestPromptArmed;
-            Ped promptPed = primary ? _individualOrderPromptPed : _individualRestPromptPed;
-
-            if (prompt == 0 || promptFor != target.Handle || promptGroup != group || !IsPromptValid(prompt) ||
-                (primary && !string.Equals(_individualOrderPromptLabel, label, StringComparison.Ordinal)))
+            int prompt = _individualOrderPrompt;
+            if (prompt == 0 || _individualOrderPromptFor != target.Handle || _individualOrderPromptGroup != group ||
+                !IsPromptValid(prompt) || !string.Equals(_individualOrderPromptLabel, label, StringComparison.Ordinal))
             {
-                if (primary) HideIndividualOrderPrompt(true); else HideIndividualOrderPrompt(false);
+                HideIndividualOrderPrompt();
                 object controlArg = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, control);
                 prompt = Convert.ToInt32(_makePrompt.Invoke(null, new object[] { controlArg, label, true, group }));
-                promptFor = target.Handle;
-                promptGroup = group;
-                armed = false;
-                if (primary) _individualOrderPromptLabel = label;
+                _individualOrderPromptFor = target.Handle;
+                _individualOrderPromptGroup = group;
+                _individualOrderPromptArmed = false;
+                _individualOrderPromptLabel = label;
             }
-            promptPed = target;
-            if (prompt != 0)
+            _individualOrderPromptPed = target;
+            if (prompt == 0) return;
+            HUD._UI_PROMPT_SET_VISIBLE(prompt, true);
+            HUD._UI_PROMPT_SET_ENABLED(prompt, true);
+            if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt))
             {
-                HUD._UI_PROMPT_SET_VISIBLE(prompt, true);
-                HUD._UI_PROMPT_SET_ENABLED(prompt, true);
-                if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt))
-                {
-                    armed = true;
-                    SaveIndividualOrderPromptState(primary, prompt, promptFor, promptGroup, armed, promptPed);
-                    return;
-                }
-                if (armed)
-                {
-                    Ped selected = promptPed;
-                    SaveIndividualOrderPromptState(primary, prompt, promptFor, promptGroup, false, promptPed);
-                    if (selected != null && selected.Exists() && selected.Handle == target.Handle)
-                        SetIndividualCompanionOrder(instance, record, order);
-                    return;
-                }
+                _individualOrderPromptArmed = true;
+                return;
             }
-            SaveIndividualOrderPromptState(primary, prompt, promptFor, promptGroup, armed, promptPed);
+            if (!_individualOrderPromptArmed) return;
+            Ped selected = _individualOrderPromptPed;
+            _individualOrderPromptArmed = false;
+            if (selected != null && selected.Exists() && selected.Handle == target.Handle)
+                SetIndividualCompanionOrder(instance, record, order);
         }
-
-        private static void SaveIndividualOrderPromptState(bool primary, int prompt, int promptFor,
-            int promptGroup, bool armed, Ped promptPed)
+        private static void HideIndividualOrderPrompt()
         {
-            if (primary)
-            {
-                _individualOrderPrompt = prompt; _individualOrderPromptFor = promptFor;
-                _individualOrderPromptGroup = promptGroup; _individualOrderPromptArmed = armed;
-                _individualOrderPromptPed = promptPed;
-            }
-            else
-            {
-                _individualRestPrompt = prompt; _individualRestPromptFor = promptFor;
-                _individualRestPromptGroup = promptGroup; _individualRestPromptArmed = armed;
-                _individualRestPromptPed = promptPed;
-            }
-        }
-
-        private static void HideIndividualOrderPrompt(bool primary)
-        {
-            int prompt = primary ? _individualOrderPrompt : _individualRestPrompt;
+            int prompt = _individualOrderPrompt;
             if (prompt != 0 && IsPromptValid(prompt))
                 try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
-            SaveIndividualOrderPromptState(primary, 0, 0, 0, false, null);
-            if (primary) _individualOrderPromptLabel = null;
+            _individualOrderPrompt = 0;
+            _individualOrderPromptFor = 0;
+            _individualOrderPromptGroup = 0;
+            _individualOrderPromptArmed = false;
+            _individualOrderPromptPed = null;
+            _individualOrderPromptLabel = null;
         }
-
         private static void HideIndividualOrderPrompts()
         {
-            HideIndividualOrderPrompt(true);
-            HideIndividualOrderPrompt(false);
+            HideIndividualOrderPrompt();
         }
 
         private static void UpdateIncapacitatedPrompt(object instance, Ped player)
@@ -2670,11 +2511,10 @@ namespace EnRAGECompanionsExtension
                 LastHealthSampleAtById[id] = Game.GameTime;
                 LastDamageAtById.Remove(id);
                 LastInjuryRecoveryAtById[id] = Game.GameTime;
-                RestScenarioStartedIds.Remove(id);
             }
             try { InvokeInstance(instance, "SaveRoster"); } catch { }
             InvokeInstance(instance, "ShowSubtitle", (GetMember(record, "Name") as string ?? "Tu compañero") +
-                " se ha levantado. La herida seguirá recuperándose con el tiempo o al descansar.");
+                " se ha levantado. La herida seguirá recuperándose con el tiempo.");
         }
 
         private static void UpdateCombatStancePrompt(object instance, Ped player)
@@ -4161,7 +4001,6 @@ namespace EnRAGECompanionsExtension
                     CustomCombatSuppressedAt.Remove(pair.Key);
                     if (!string.IsNullOrWhiteSpace(id))
                     {
-                        RestScenarioStartedIds.Remove(id);
                         LastObservedHealthById.Remove(id);
                         LastDamageBaselineById.Remove(id);
                     }
@@ -4512,7 +4351,6 @@ namespace EnRAGECompanionsExtension
             SetPersistentFollowState(GetField(companion, "Rec"), CompanionFollowState.Dismissed, null);
             string dismissedId = GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty;
             LastIndividualOrderTaskAt.Remove(dismissedId);
-            RestScenarioStartedIds.Remove(dismissedId);
             LastObservedHealthById.Remove(dismissedId);
             LastDamageBaselineById.Remove(dismissedId);
             LastDamageAtById.Remove(dismissedId);
@@ -5137,7 +4975,9 @@ namespace EnRAGECompanionsExtension
                         if (separator <= 0) return true;
                         string key = candidate.Substring(0, separator).Trim();
                         return !key.Equals("EnableAppearancePersistence", StringComparison.OrdinalIgnoreCase) &&
-                               !key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase);
+                               !key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("RestDurationSeconds", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase);
                     }).ToArray();
                     if (cleanedLines.Length != existingLines.Length)
                     {
@@ -5172,7 +5012,6 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("EnableIndividualOrders")) missingSettings.Add("EnableIndividualOrders=true");
                     if (!existingKeys.Contains("EnableWaitMode")) missingSettings.Add("EnableWaitMode=true");
                     if (!existingKeys.Contains("WaitRadius")) missingSettings.Add("WaitRadius=8.0");
-                    if (!existingKeys.Contains("RestDurationSeconds")) missingSettings.Add("RestDurationSeconds=60");
                     if (!existingKeys.Contains("EnableInjurySystem")) missingSettings.Add("EnableInjurySystem=true");
                     if (!existingKeys.Contains("InjuryDamageThresholdPercent")) missingSettings.Add("InjuryDamageThresholdPercent=10");
                     if (!existingKeys.Contains("InjuryRecoverySeconds")) missingSettings.Add("InjuryRecoverySeconds=180");
@@ -5180,7 +5019,6 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("MedicineHealingPercent")) missingSettings.Add("MedicineHealingPercent=100");
                     if (!existingKeys.Contains("MedicineRecoveryReductionSeconds")) missingSettings.Add("MedicineRecoveryReductionSeconds=60");
                     if (!existingKeys.Contains("RecruitMedicineCostCents")) missingSettings.Add("RecruitMedicineCostCents=100");
-                    if (!existingKeys.Contains("RestHealsInjuries")) missingSettings.Add("RestHealsInjuries=true");
                     if (missingSettings.Count > 0)
                     {
                         File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity and individual companion orders" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
@@ -5224,8 +5062,6 @@ namespace EnRAGECompanionsExtension
                         else if (key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase) &&
                                  float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float waitRadius))
                             _waitRadius = Math.Max(1.0f, Math.Min(50.0f, waitRadius));
-                        else if (key.Equals("RestDurationSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int restDuration))
-                            _restDurationSeconds = Math.Max(10, Math.Min(3600, restDuration));
                         else if (key.Equals("EnableInjurySystem", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableInjurySystem))
                             _enableInjurySystem = enableInjurySystem;
                         else if (key.Equals("InjuryDamageThresholdPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryThreshold))
@@ -5240,8 +5076,6 @@ namespace EnRAGECompanionsExtension
                             _medicineRecoveryReductionSeconds = Math.Max(0, Math.Min(86400, medicineReduction));
                         else if (key.Equals("RecruitMedicineCostCents", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineCost))
                             _recruitMedicineCostCents = Math.Max(0, Math.Min(100000, medicineCost));
-                        else if (key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool restHealsInjuries))
-                            _restHealsInjuries = restHealsInjuries;
                     }
                 }
                 else
@@ -5267,7 +5101,6 @@ namespace EnRAGECompanionsExtension
                         "EnableIndividualOrders=true\r\n" +
                         "EnableWaitMode=true\r\n" +
                         "WaitRadius=8.0\r\n" +
-                        "RestDurationSeconds=60\r\n" +
                         "EnableInjurySystem=true\r\n" +
                         "InjuryDamageThresholdPercent=10\r\n" +
                         "InjuryRecoverySeconds=180\r\n" +
@@ -5275,7 +5108,7 @@ namespace EnRAGECompanionsExtension
                         "MedicineHealingPercent=100\r\n" +
                         "MedicineRecoveryReductionSeconds=60\r\n" +
                         "RecruitMedicineCostCents=100\r\n" +
-                        "RestHealsInjuries=true\r\n");
+                        "\r\n");
                 }
             }
             catch (Exception ex)
