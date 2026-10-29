@@ -4996,7 +4996,6 @@ namespace EnRAGECompanionsExtension
                 { "recruit.male_only", "Solo puedes reclutar NPC masculinos." },
                 { "recruit.faction_missing", "La facción configurada '{0}' no existe en enRAGE. Revisa RecruitGangId en el archivo INI." },
                 { "recruit.exiled", "Este NPC fue expulsado permanentemente y no puede volver a ser reclutado." },
-                { "recruit.prompt.call", "Llamarlo" },
                 { "recruit.prompt.start", "Cabalga conmigo" },
                 { "recruit.success.adopted", "{0} ha vuelto y vuelve a seguirte." },
                 { "recruit.success.approaching", "{0} fue llamado y se acerca para seguirte." },
