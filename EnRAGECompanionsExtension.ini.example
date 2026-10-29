@@ -17,10 +17,6 @@ AffinityTravelIntervalSeconds=300
 AffinityTravelGain=1
 AffinityCombatGain=2
 AffinityTreatmentGain=3
-; Capture/reapply outfit hash, standard clothing slots, hat/accessory props, and current equipped weapon hash when wrappers exist.
-; Not full YMT XML/material persistence or a full weapon inventory snapshot.
-EnableAppearancePersistence=true
-PreserveSavedOutfit=true
 ; Individual companion orders and wait/rest behavior.
 EnableIndividualOrders=true
 EnableWaitMode=true
