@@ -2499,8 +2499,14 @@ namespace EnRAGECompanionsExtension
             }
             else
             {
-                // The native interaction may start asynchronously. Leave the state persisted and
-                // let enRAGE/game finish the wounded-down recovery instead of forcing a resurrection.
+                // The paired native can complete asynchronously while the wrapper still reports
+                // IsDead. Protect this short transition from death cleanup and movement-order tasks.
+                RecoveryAnimationUntilById[id] = Game.GameTime + 3000;
+                LastAutoAssistAtById[id] = Game.GameTime + 8000;
+                object helperRecordPending = GetTrackedRecord(instance, helperPed.Handle);
+                string helperPendingId = GetMember(helperRecordPending, "Id") as string;
+                if (!string.IsNullOrWhiteSpace(helperPendingId))
+                    RecoveryAnimationUntilById[helperPendingId] = Game.GameTime + 2200;
                 return true;
             }
 
@@ -2559,7 +2565,8 @@ namespace EnRAGECompanionsExtension
             foreach (object companion in companions)
             {
                 string key = GetField(companion, "Key") as string;
-                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                    GetFieldInt(companion, "State", 2) == 2)
                     continue;
                 Ped memberPed = GetField(companion, "Ped") as Ped;
                 if (memberPed == null || !memberPed.Exists()) memberPed = GetField(companion, "Real") as Ped;
@@ -4119,18 +4126,30 @@ namespace EnRAGECompanionsExtension
                         LastObservedHealthById.TryGetValue(id, out previousHealth) && health < previousHealth)
                         LastDamageAtById[id] = Game.GameTime;
 
-                    // In RDR2 a ped can report IsDead while still in the incapacitated state.
-                    // Try the recovery path before mutating the roster's IsAlive flag.
-                    if (IsLikelyIncapacitated(cached.Record, ped, id) || ped.IsDead)
+                    int recoveryUntil;
+                    if (!string.IsNullOrWhiteSpace(id) &&
+                        RecoveryAnimationUntilById.TryGetValue(id, out recoveryUntil) &&
+                        Game.GameTime < recoveryUntil)
+                        continue;
+
+                    // Only enRAGE's native WoundedDown state (or the extension's recent-hit
+                    // threshold for living peds) is recoverable. A generic dead ped stays dead.
+                    if (IsLikelyIncapacitated(instance, cached.Record, ped, id))
                     {
-                        // A recruited companion's death is a recoverable roster incapacitation.
-                        // Never mark the record dead here: enRAGE would then replace the ped.
                         SetMember(cached.Record, "IsAlive", true);
                         SetMember(cached.Record, "PresumedDead", false);
                         TryEnterIncapacitated(instance, cached.Record, ped);
                         continue;
                     }
 
+                    if (!ped.IsDead) continue;
+                    CompanionPersistentState staleInjury = GetPersistentState(cached.Record, false);
+                    if (staleInjury != null && staleInjury.Injury != null && staleInjury.Injury.IsIncapacitated)
+                    {
+                        staleInjury.Injury.IsIncapacitated = false;
+                        staleInjury.Injury.IncapacitatedSinceUtcTicks = 0;
+                        SavePersistentState(staleInjury);
+                    }
                     if (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive)
                         continue;
                     SetMember(cached.Record, "IsAlive", false);
@@ -4617,19 +4636,43 @@ namespace EnRAGECompanionsExtension
 
             CompanionPersistentState state = GetPersistentState(record, true);
             if (state == null || state.Injury == null) return false;
+            int now = Game.GameTime, health = 0, maxHealth = 1;
+            try { health = ped.Health; } catch { }
+            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { maxHealth = 1; }
+
             if (state.Injury.IsIncapacitated)
             {
-                // Do not undo the protection installed for a downed recruit.
-                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
-                return true;
+                int recoveredHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
+                bool nativeDown = IsNativeWoundedDown(instance, ped);
+                bool stillDown = ped.IsDead || nativeDown || ped.IsIncapacitated || ped.IsRagdoll;
+                if (!stillDown && health >= recoveredHealth)
+                {
+                    // _INCAPACITATED_REVIVE has completed the native recovery animation.
+                    state.Injury.IsIncapacitated = false;
+                    state.Injury.IncapacitatedSinceUtcTicks = 0;
+                    state.Injury.IsInjured = state.Injury.Severity > 0 || state.Injury.RecoverySecondsRemaining > 0;
+                    SavePersistentState(state);
+                    SetMember(record, "IsAlive", true);
+                    SetMember(record, "PresumedDead", false);
+                    try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+                    LastObservedHealthById[id] = health;
+                    LastDamageBaselineById[id] = health;
+                    LastHealthSampleAtById[id] = now;
+                    LastDamageAtById.Remove(id);
+                    LastInjuryRecoveryAtById[id] = now;
+                    try { InvokeInstance(instance, "SaveRoster"); } catch { }
+                }
+                else
+                {
+                    // Do not undo the protection installed for a downed recruit.
+                    try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
+                    return true;
+                }
             }
 
             // enRAGE's Adopt marks real companions invincible. Re-enable damage before sampling.
             try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); }
             catch (Exception ex) { Log("Could not restore recruit damageability: " + Unwrap(ex)); }
-            int now = Game.GameTime, health = 0, maxHealth = 1;
-            try { health = ped.Health; } catch { }
-            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { maxHealth = 1; }
 
             int previousHealth;
             bool hasPreviousHealth = LastObservedHealthById.TryGetValue(id, out previousHealth);
