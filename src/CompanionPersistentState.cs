@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.Serialization;
 
 namespace EnRAGECompanionsExtension
@@ -18,7 +17,6 @@ namespace EnRAGECompanionsExtension
         [DataMember(Order = 5)] public CompanionSavedPosition SavedPosition { get; set; }
         [DataMember(Order = 6)] public CompanionInjuryState Injury { get; set; }
         [DataMember(Order = 7)] public int Affinity { get; set; }
-        [DataMember(Order = 8)] public CompanionAppearanceState Appearance { get; set; }
         [DataMember(Order = 9)] public long LastUpdatedUtcTicks { get; set; }
         // Kept separately from FollowState so a resting companion can resume/expire the rest timer.
         [DataMember(Order = 10)] public long RestStartedUtcTicks { get; set; }
@@ -33,7 +31,6 @@ namespace EnRAGECompanionsExtension
             SavedPosition = new CompanionSavedPosition();
             Injury = new CompanionInjuryState();
             Affinity = 50;
-            Appearance = new CompanionAppearanceState();
             LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
             RestStartedUtcTicks = 0;
             RosterOrder = -1;
@@ -53,8 +50,6 @@ namespace EnRAGECompanionsExtension
             SavedPosition.Normalize();
             if (Injury == null) Injury = new CompanionInjuryState();
             Injury.Normalize();
-            if (Appearance == null) Appearance = new CompanionAppearanceState();
-            Appearance.Normalize();
             Affinity = Clamp(Affinity, 0, 100);
             if (LastUpdatedUtcTicks < 0 || LastUpdatedUtcTicks > DateTime.MaxValue.Ticks)
                 LastUpdatedUtcTicks = DateTime.UtcNow.Ticks;
@@ -166,55 +161,4 @@ namespace EnRAGECompanionsExtension
         }
     }
 
-    [DataContract]
-    public sealed class CompanionAppearanceState
-    {
-        // Imported from EnRAGECompanionsExtension.outfits.txt during migration.
-        [DataMember(Order = 1)] public bool HasLegacyOutfitHash { get; set; }
-        [DataMember(Order = 2)] public uint LegacyOutfitHash { get; set; }
-        // Separate slots prevent treating an outfit hash as a full wardrobe or weapon loadout.
-        [DataMember(Order = 3)] public List<CompanionClothingComponent> ClothingComponents { get; set; }
-        [DataMember(Order = 4)] public uint? HatComponentHash { get; set; }
-        [DataMember(Order = 5)] public List<uint> WeaponHashes { get; set; }
-        // Props are separate from clothing components; prop slot 0 is commonly the hat.
-        [DataMember(Order = 6)] public List<CompanionPedProp> PedProps { get; set; }
-
-        public CompanionAppearanceState()
-        {
-            ClothingComponents = new List<CompanionClothingComponent>();
-            WeaponHashes = new List<uint>();
-            PedProps = new List<CompanionPedProp>();
-        }
-
-        public void Normalize()
-        {
-            if (ClothingComponents == null) ClothingComponents = new List<CompanionClothingComponent>();
-            if (WeaponHashes == null) WeaponHashes = new List<uint>();
-            if (PedProps == null) PedProps = new List<CompanionPedProp>();
-            if (ClothingComponents.Count > 64) ClothingComponents.RemoveRange(64, ClothingComponents.Count - 64);
-            if (WeaponHashes.Count > 32) WeaponHashes.RemoveRange(32, WeaponHashes.Count - 32);
-            if (PedProps.Count > 16) PedProps.RemoveRange(16, PedProps.Count - 16);
-            ClothingComponents.RemoveAll(x => x == null || x.ComponentId < 0 || x.ComponentId > 255);
-            PedProps.RemoveAll(x => x == null || x.PropId < 0 || x.PropId > 15 ||
-                x.DrawableId < -1 || x.TextureId < 0);
-        }
-    }
-
-    [DataContract]
-    public sealed class CompanionClothingComponent
-    {
-        [DataMember(Order = 1)] public int ComponentId { get; set; }
-        [DataMember(Order = 2)] public uint DrawableHash { get; set; }
-        [DataMember(Order = 3)] public uint TextureHash { get; set; }
-        [DataMember(Order = 4)] public uint PaletteHash { get; set; }
-    }
-
-    [DataContract]
-    public sealed class CompanionPedProp
-    {
-        [DataMember(Order = 1)] public int PropId { get; set; }
-        // -1 means the NPC had no prop in that slot when the snapshot was captured.
-        [DataMember(Order = 2)] public int DrawableId { get; set; }
-        [DataMember(Order = 3)] public int TextureId { get; set; }
-    }
 }
