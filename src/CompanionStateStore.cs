@@ -281,9 +281,11 @@ namespace EnRAGECompanionsExtension
                 _states.Clear();
                 foreach (CompanionPersistentState state in recoveredStates)
                     _states[state.RecordId] = state;
-                _dirty = false;
+                // A restored schema-1 backup is immediately rewritten into the reduced schema 2
+                // by CompanionStateRuntime, so removed fields do not persist in the active file.
+                _dirty = document.SchemaVersion < CurrentSchemaVersion;
                 Emit("Recovered " + _states.Count + " companion state record(s) from " +
-                    Path.GetFileName(backupPath) + ".");
+                    Path.GetFileName(backupPath) + ( _dirty ? "; schema migration queued." : "."));
                 return true;
             }
             catch (Exception ex)
