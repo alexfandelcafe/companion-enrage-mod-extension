@@ -104,6 +104,9 @@ namespace EnRAGECompanionsExtension
         private static int _medicineHealingPercent = 100;
         private static int _medicineRecoveryReductionSeconds = 60;
         private static int _recruitMedicineCostCents = 100;
+        private static readonly Dictionary<string, string> DefaultExtensionTexts = CreateDefaultExtensionTexts();
+        private static readonly Dictionary<string, string> ExtensionTexts =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastIndividualOrderTaskAt =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastObservedHealthById =
@@ -229,6 +232,7 @@ namespace EnRAGECompanionsExtension
                 }
 
                 ReadConfiguration();
+                LoadExtensionTexts();
                 if (!IsConfiguredRecruitmentFactionAvailable())
                     Log("WARNING: configured enRAGE faction ID '" + _recruitGangId + "' was not found. Recruitment will be blocked until RecruitGangId is set to an existing faction ID.");
                 if (!string.Equals(_recruitGangId, _recruitRosterId, StringComparison.OrdinalIgnoreCase) &&
@@ -4953,6 +4957,155 @@ namespace EnRAGECompanionsExtension
                 catch { }
             }
             return correctPath;
+        }
+
+
+        private static Dictionary<string, string> CreateDefaultExtensionTexts()
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "order.wait_disabled", "El modo de espera está desactivado en el archivo INI." },
+                { "order.need_called", "Primero debes llamar a este compañero desde el roster." },
+                { "order.not_found", "No se pudo localizar al compañero para aplicar la orden." },
+                { "order.following", "{0} vuelve a seguirte." },
+                { "order.waiting", "{0} esperará aquí." },
+                { "affinity.disabled", "La afinidad está desactivada en el archivo INI." },
+                { "affinity.status", "{0}: afinidad {1}/100." },
+                { "affinity.meter", "AFINIDAD {0}/100" },
+                { "action.call", "Llamarlo" },
+                { "action.kick", "Echar de la banda" },
+                { "action.kick.confirm", "Confirmar expulsión" },
+                { "action.kick.cancel", "Cancelar expulsión" },
+                { "action.affinity.increase", "Mejorar afinidad (+10)" },
+                { "action.affinity.decrease", "Reducir afinidad (-10)" },
+                { "subtitle.kick.cancelled", "Expulsión cancelada." },
+                { "subtitle.already_following", "Ese miembro ya te está siguiendo." },
+                { "subtitle.cannot_kick_following", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero." },
+                { "subtitle.kick.warning", "Aviso: la expulsión es irreversible y podría tener consecuencias para ti en el futuro. Elige Confirmar expulsión para continuar." },
+                { "subtitle.kick.invalid", "La confirmación ya no es válida. Vuelve a seleccionar la expulsión." },
+                { "medicine.exiled", "{0} ya fue expulsado de la banda y no puede recibir remedios." },
+                { "medicine.dead", "No puedes curar a un miembro fallecido del roster." },
+                { "medicine.target.invalid", "No se pudo identificar al recluta apuntado; no se cobró el remedio." },
+                { "medicine.full_health", "{0} ya tiene la salud al máximo y no hay ninguna herida pendiente." },
+                { "medicine.cash.check_failed", "No se pudo comprobar el dinero disponible." },
+                { "medicine.insufficient_cash", "Necesitas {0} dólares para comprar el remedio." },
+                { "medicine.processing", "El remedio ya se está procesando; no se cobró otra vez." },
+                { "medicine.charge_failed", "No se pudo confirmar el cobro; espera un momento antes de volver a intentarlo." },
+                { "medicine.failed_refunded", "El remedio no pudo aplicarse; se devolvió el cobro." },
+                { "medicine.failed_refund_failed", "El remedio no pudo aplicarse y no se pudo confirmar la devolución. Revisa el registro del mod." },
+                { "medicine.success", "{0} recibió el remedio. Curación: {1}%. Coste: {2} dólares." },
+                { "kick.success", "{0} ha sido expulsado de la banda. La decisión no se puede deshacer." },
+                { "kick.failed", "No se pudo completar la expulsión. Revisa el registro de la extensión." },
+                { "roster.model_missing", "No se pudo recuperar el modelo de este miembro." },
+                { "roster.dead", "{0} figura como fallecido en el roster." },
+                { "roster.already_following", "{0} ya te está siguiendo." },
+                { "recruit.limit", "No puedes llevar más compañeros ahora." },
+                { "recruit.male_only", "Solo puedes reclutar NPC masculinos." },
+                { "recruit.faction_missing", "La facción configurada '{0}' no existe en enRAGE. Revisa RecruitGangId en el archivo INI." },
+                { "recruit.exiled", "Este NPC fue expulsado permanentemente y no puede volver a ser reclutado." },
+                { "recruit.prompt.call", "Llamarlo" },
+                { "recruit.prompt.start", "Cabalga conmigo" },
+                { "recruit.success.adopted", "{0} ha vuelto y vuelve a seguirte." },
+                { "recruit.success.approaching", "{0} fue llamado y se acerca para seguirte." },
+                { "companion.default", "Tu compañero" },
+                { "companion.ally", "Tu aliado" },
+                { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
+                { "companion.recruited", "{0} ahora combate de tu lado." },
+                { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
+                { "incapacitated.prompt", "Ayudar a levantarse" },
+                { "incapacitated.resurrect_failed", "No se pudo reanimar al compañero con los nativos disponibles." },
+                { "incapacitated.health_failed", "No se pudo restaurar la salud; el compañero sigue incapacitado." },
+                { "incapacitated.still_down", "El compañero todavía no puede levantarse; sigue incapacitado." },
+                { "incapacitated.verify_failed", "No se pudo verificar la recuperación; el compañero sigue incapacitado." },
+                { "incapacitated.entered", "{0} ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse." },
+                { "incapacitated.helped", "{0} se ha levantado. La herida seguirá recuperándose con el tiempo." },
+                { "stance.prefix", "Postura: {0}" },
+                { "stance.hold", "Mantener posición" },
+                { "stance.cover", "Cubrir al jugador" },
+                { "stance.defend", "Defender la zona" },
+                { "stance.fire", "Fuego a mi señal" },
+                { "stance.follow", "Seguir órdenes" },
+                { "stance.changed", "{0}: postura {1}." },
+                { "prompt.medicine", "Dar remedio (${0})" }
+            };
+        }
+
+        private static void LoadExtensionTexts()
+        {
+            ExtensionTexts.Clear();
+            foreach (KeyValuePair<string, string> item in DefaultExtensionTexts)
+                ExtensionTexts[item.Key] = item.Value;
+
+            string path = ResolveScriptsFile("EnRAGECompanionsExtension.texts.ini");
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    List<string> initial = new List<string>
+                    {
+                        "; EnRAGE Companions Extension translations.",
+                        "; Edit the value after '='; do not change the keys.",
+                        "; Keep placeholders such as {0}, {1}, and {2} in formatted texts.",
+                        ""
+                    };
+                    initial.AddRange(DefaultExtensionTexts.Select(item => item.Key + "=" + item.Value));
+                    File.WriteAllLines(path, initial);
+                    Log("Created editable extension text file: " + path);
+                    return;
+                }
+
+                HashSet<string> foundKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string raw in File.ReadAllLines(path))
+                {
+                    string line = (raw ?? string.Empty).Trim();
+                    if (line.Length == 0 || line.StartsWith(";") || line.StartsWith("#")) continue;
+                    int split = line.IndexOf('=');
+                    if (split <= 0) continue;
+                    string key = line.Substring(0, split).Trim();
+                    if (!DefaultExtensionTexts.ContainsKey(key)) continue;
+                    string value = line.Substring(split + 1).Trim();
+                    if (value.Length == 0) continue;
+                    ExtensionTexts[key] = value;
+                    foundKeys.Add(key);
+                }
+
+                List<string> missing = DefaultExtensionTexts
+                    .Where(item => !foundKeys.Contains(item.Key))
+                    .Select(item => item.Key + "=" + item.Value)
+                    .ToList();
+                if (missing.Count > 0)
+                {
+                    List<string> additions = new List<string> { "", "; New extension text keys; translate the value after '='." };
+                    additions.AddRange(missing);
+                    File.AppendAllLines(path, additions);
+                }
+                Log("Loaded " + foundKeys.Count + " editable extension text override(s).");
+            }
+            catch (Exception ex)
+            {
+                Log("Translation file could not be loaded; built-in Spanish texts will be used. " + Unwrap(ex));
+            }
+        }
+
+        private static string T(string key)
+        {
+            string value;
+            if (ExtensionTexts.TryGetValue(key, out value) && !string.IsNullOrWhiteSpace(value))
+                return value;
+            if (DefaultExtensionTexts.TryGetValue(key, out value))
+                return value;
+            return key;
+        }
+
+        private static string TF(string key, params object[] args)
+        {
+            string format = T(key);
+            try { return string.Format(CultureInfo.InvariantCulture, format, args); }
+            catch (FormatException)
+            {
+                try { return string.Format(CultureInfo.InvariantCulture, DefaultExtensionTexts[key], args); }
+                catch { return format; }
+            }
         }
 
         private static string ReadConfiguration()
