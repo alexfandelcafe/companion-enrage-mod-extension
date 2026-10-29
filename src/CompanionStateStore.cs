@@ -14,7 +14,7 @@ namespace EnRAGECompanionsExtension
     /// </summary>
     public sealed class CompanionStateStore
     {
-        public const int CurrentSchemaVersion = 2;
+        public const int CurrentSchemaVersion = 3;
         public const string StateFileName = "EnRAGECompanionsExtension.companions.json";
 
         private readonly string _statePath;
@@ -341,7 +341,6 @@ namespace EnRAGECompanionsExtension
                         RecoverySecondsRemaining = 0,
                         FirstInjuredUtcTicks = old.InjuryStartedUtcTicks
                     };
-                    state.RestStartedUtcTicks = old.RestStartedUtcTicks;
                     state.Affinity = old.Affinity;
 
                     state.Normalize(id);
@@ -421,7 +420,6 @@ namespace EnRAGECompanionsExtension
         [System.Runtime.Serialization.DataMember] public float AnchorZ { get; set; }
         [System.Runtime.Serialization.DataMember] public int InjurySeverity { get; set; }
         [System.Runtime.Serialization.DataMember] public long InjuryStartedUtcTicks { get; set; }
-        [System.Runtime.Serialization.DataMember] public long RestStartedUtcTicks { get; set; }
         [System.Runtime.Serialization.DataMember] public int Affinity { get; set; }
     }
 
