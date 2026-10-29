@@ -195,7 +195,7 @@ namespace EnRAGECompanionsExtension
                 _socialTarget = FindMethod(_mainType, "SocialTarget", 1, p => IsPedType(p[0].ParameterType));
                 _recordAt = FindMethod(_mainType, "RecordAt", 1, p => p[0].ParameterType == typeof(int));
                 _regardOfRecord = FindMethod(_mainType, "RegardOfRecord", 1,
-                    p => p[0].ParameterType.Name == "NemesisRecord" && p[0].ParameterType.FullName == "NemesisSystem.NemesisRecord");
+                    p => p[0].ParameterType.Name == "NemesisRecord");
                 _roleOf = FindMethod(_mainType, "RoleOf", 1, p => p[0].ParameterType == typeof(int));
                 _whoIs = FindMethod(_mainType, "WhoIs", 1, p => p[0].ParameterType == typeof(int));
                 _makePrompt = FindMethod(_mainType, "MakePrompt", 4, p =>
