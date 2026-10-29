@@ -126,12 +126,6 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastPlayerFireAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> LastResurrectionAttemptAtById =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static Type _uiDrawType;
-        private static MethodInfo _uiDrawRect;
-        private static MethodInfo _uiDrawText;
-        private static object _activeAffinityDetailRecord;
         private sealed class AffinityTravelTracker
         {
             internal int StartedAt;
