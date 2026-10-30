@@ -79,7 +79,7 @@ RecruitMedicineCostCents=100
 
 ## Translating extension text
 
-On first launch, the extension creates `scripts/EnRAGECompanionsExtension.texts.ini` with editable labels and messages. Change only the text after the first `=`; leave the keys unchanged. Keep placeholders such as `{0}`, `{1}`, `{2}` and `${0}` intact in formatted messages. Missing keys are appended automatically when the extension updates, and blank/invalid entries fall back to the built-in Spanish text. Restart the game/script after editing so the catalog reloads. The repository also contains `EnRAGECompanionsExtension.texts.ini.example` as a template.
+On first launch, the extension creates `scripts/EnRAGECompanionsExtension.texts.ini` with the active in-game text: contextual prompts, roster actions, subtitles, treatment/expulsion feedback, combat stances, and generated ally names. Change only the text after the first `=`; leave the keys unchanged. Keep placeholders such as `{0}`, `{1}`, `{2}` and `${0}` intact in formatted messages. Missing keys are appended automatically when the extension updates, and blank/invalid entries fall back to the built-in Spanish text. The example template is kept in sync with the runtime catalog and contains only keys currently used by the extension. Restart the game/script after editing so the catalog reloads.
 
 ## Scope and verification
 
