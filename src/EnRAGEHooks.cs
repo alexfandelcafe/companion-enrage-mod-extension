@@ -4847,7 +4847,7 @@ namespace EnRAGECompanionsExtension
 
                 // Only clear a native asynchronous revive after its animation window completed.
                 // A simulated knock-out must otherwise remain down until the E / helper recovery path runs.
-                if (recoveryWindowExpired && !ped.IsDead && !stillDown && health >= recoveredHealth)
+                if (recoveryWindowExpired && !ped.IsDead && !nativeDown && !stillDown && health >= recoveredHealth)
                 {
                     state.Injury.IsIncapacitated = false;
                     state.Injury.IncapacitatedSinceUtcTicks = 0;
