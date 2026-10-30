@@ -4704,6 +4704,23 @@ namespace EnRAGECompanionsExtension
             }
             if (!string.IsNullOrWhiteSpace(id))
             {
+                foreach (KeyValuePair<int, CachedRosterRecord> pair in RosterRecordsByPedHandle.ToArray())
+                {
+                    if (pair.Value == null ||
+                        !string.Equals(GetMember(pair.Value.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    int cachedHandle = pair.Key;
+                    RosterRecordsByPedHandle.Remove(cachedHandle);
+                    AppliedPromptNames.Remove(cachedHandle);
+                    CustomCompanionCombatTargets.Remove(cachedHandle);
+                    CustomCombatSuppressedAt.Remove(cachedHandle);
+                    AmbientReleasedRecruitPeds.Remove(cachedHandle);
+                    AmbientReleasedWanderAt.Remove(cachedHandle);
+                    if (_incapacitatedPromptFor == cachedHandle) HideIncapacitatedPrompt();
+                    if (_medicinePromptFor == cachedHandle) HideRecruitMedicinePrompt();
+                    if (_combatStancePromptFor == cachedHandle) HideCombatStancePrompt();
+                    if (_genericPromptFor == cachedHandle) HideGenericRecruitPrompt();
+                }
                 RecruitedRosterModels.Remove(id);
                 LowHealthRideSuppressedIds.Remove(id);
                 LastObservedHealthById.Remove(id);
@@ -4736,8 +4753,23 @@ namespace EnRAGECompanionsExtension
 
             object record = GetField(companion, "Rec");
             if (record == null || IsExiledRosterRecord(record)) return false;
+            string id = GetMember(record, "Id") as string;
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists())
+            {
+                foreach (KeyValuePair<int, CachedRosterRecord> pair in RosterRecordsByPedHandle.ToArray())
+                {
+                    if (pair.Value == null ||
+                        !string.Equals(GetMember(pair.Value.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (pair.Value.Ped != null && pair.Value.Ped.Exists())
+                    {
+                        ped = pair.Value.Ped;
+                        break;
+                    }
+                }
+            }
             if (GetMember(record, "IsAlive") is bool alive && !alive)
                 return false;
             if (ped != null && ped.Exists() && (ped.IsDead || IsNativeWoundedDown(instance, ped)))
@@ -4746,7 +4778,6 @@ namespace EnRAGECompanionsExtension
             if (persistent != null && persistent.Injury != null && persistent.Injury.IsIncapacitated)
                 return false;
 
-            string id = GetMember(record, "Id") as string;
             string name = GetMember(record, "Name") as string ?? GetField(companion, "Name") as string ?? "Tu aliado";
             Ped horse = GetField(companion, "Horse") as Ped;
 
