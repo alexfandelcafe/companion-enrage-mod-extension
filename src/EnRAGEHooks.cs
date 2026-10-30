@@ -487,9 +487,11 @@ namespace EnRAGECompanionsExtension
                     object companionRecord = GetField(companion, "Rec");
                     if (companionRecord != null && GetMember(companionRecord, "IsAlive") is bool memberAlive && !memberAlive)
                         continue;
-                    MaintainExtensionCompanionDamageability(companion, player);
                     if (MaintainIndividualCompanionOrder(__instance, companion, player))
+                    {
+                        MaintainExtensionCompanionDamageability(companion, player);
                         continue;
+                    }
                     int state = GetFieldInt(companion, "State", -1);
                     switch (state)
                     {
@@ -2718,12 +2720,25 @@ namespace EnRAGECompanionsExtension
             }
 
             object namingRecord = rosterRecord ?? trackedRecord;
+            if (namingRecord == null)
+            {
+                InvokeInstance(__instance, "ShowSubtitle", "No se pudo obtener el nombre del NPC desde enRAGE; no se reclutó.");
+                Log("Recruitment cancelled: no enRAGE record/name was available for ped " + ped.Handle + ".");
+                return;
+            }
             ApplyMaximumRecruitFriendship(namingRecord);
             string name = GetMember(namingRecord, "Name") as string;
             if (string.IsNullOrWhiteSpace(name))
-                name = FindRecordName(__instance, ped.Handle);
+            {
+                string ignoredTitle;
+                name = FindEnRagePedName(__instance, ped, out ignoredTitle);
+            }
             if (string.IsNullOrWhiteSpace(name))
-                name = "Aliado " + (CountActiveCompanions(__instance) + 1);
+            {
+                InvokeInstance(__instance, "ShowSubtitle", "No se pudo obtener el nombre del NPC desde enRAGE; no se reclutó.");
+                Log("Recruitment cancelled: enRAGE returned no native NPC name for ped " + ped.Handle + ".");
+                return;
+            }
 
             object companion = null;
             bool added = false;
