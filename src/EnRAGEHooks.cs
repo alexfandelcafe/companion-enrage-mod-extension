@@ -107,6 +107,9 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastPlayerMeleeActionAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static int _lastPlayerWeaponFireAt = -100000;
+        private static readonly Dictionary<string, int> LastPlayerFireAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastAffinityObservedHealthById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastStoryRosterSyncAt = -100000;
@@ -1708,9 +1711,7 @@ namespace EnRAGECompanionsExtension
                 (inStoryRoster ? "vdl" : _recruitGangId);
 
             ExiledRosterIds.Add(id);
-            HideIndividualOrderPrompts();
             HideRecruitMedicinePrompt();
-            HideCombatStancePrompt();
             SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
             SavePersistentIdSet("EnRAGECompanionsExtension.exiled-roster.txt", ExiledRosterIds);
 
@@ -2352,7 +2353,7 @@ namespace EnRAGECompanionsExtension
                     return;
                 }
 
-                // During a real encounter H is reserved for the contextual combat-stance prompt.
+                // Avoid overlapping the treatment prompt with an active combat encounter.
                 if (FindAttackerTarget(instance, target, player) != null)
                 {
                     HideRecruitMedicinePrompt();
@@ -2933,7 +2934,7 @@ namespace EnRAGECompanionsExtension
 
             if (stance == CompanionCombatStance.FireOnSignal)
             {
-                int lastPlayerFire;
+                int lastPlayerFire = -100000;
                 bool recentPlayerFire = playerFiring ||
                     (now >= _lastPlayerWeaponFireAt && now - _lastPlayerWeaponFireAt <= 2500) ||
                     (!string.IsNullOrWhiteSpace(stanceId) &&
@@ -4143,7 +4144,6 @@ namespace EnRAGECompanionsExtension
                 AmbientReleasedRecruitPeds.Remove(handle);
                 AmbientReleasedWanderAt.Remove(handle);
                 if (_medicinePromptFor == handle) HideRecruitMedicinePrompt();
-                if (_combatStancePromptFor == handle) HideCombatStancePrompt();
                 if (_genericPromptFor == handle) HideGenericRecruitPrompt();
             }
             if (!string.IsNullOrWhiteSpace(id))
@@ -4161,7 +4161,6 @@ namespace EnRAGECompanionsExtension
                     AmbientReleasedRecruitPeds.Remove(cachedHandle);
                     AmbientReleasedWanderAt.Remove(cachedHandle);
                     if (_medicinePromptFor == cachedHandle) HideRecruitMedicinePrompt();
-                    if (_combatStancePromptFor == cachedHandle) HideCombatStancePrompt();
                     if (_genericPromptFor == cachedHandle) HideGenericRecruitPrompt();
                 }
                 RecruitedRosterModels.Remove(id);
@@ -4170,6 +4169,7 @@ namespace EnRAGECompanionsExtension
                 LastHealthSampleAtById.Remove(id);
                 LastInjuryRecoveryAtById.Remove(id);
                 LastInjuryPersistAtById.Remove(id);
+                LastPlayerFireAtById.Remove(id);
             }
         }
 
@@ -4343,6 +4343,7 @@ namespace EnRAGECompanionsExtension
             try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
             int previousHealth;
             if (LastObservedHealthById.TryGetValue(id, out previousHealth) && health < previousHealth)
+                LastDamageBaselineById[id] = previousHealth;
             int baseline;
             if (!LastDamageBaselineById.TryGetValue(id, out baseline))
             {
