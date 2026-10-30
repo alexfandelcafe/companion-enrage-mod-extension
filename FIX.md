@@ -191,7 +191,7 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 
 ## Corrección actual — afinidad por interacciones y retirada de la orden de espera
 
-- La afinidad persistente responde a interacciones nativas al apuntar al recluta: saludar suma 2, provocar resta 3, un ataque físico/empujón detectado resta 5 y un disparo que dañe al recluta resta 8. Las acciones tienen limitación temporal por registro para evitar contabilizarlas cada frame.
+- La afinidad persistente responde a interacciones nativas: cuando RDR2 identifica al recluta como objetivo, saludar suma 2 y provocar resta 3. Un recluta cercano al que se detecte un empujón o ataque físico pierde 5. Si el recluta objetivo pierde salud dentro de una breve ventana tras un disparo del jugador, pierde 8; esto es una heurística temporal, no una atribución nativa confirmada del origen del daño. Las acciones tienen limitación temporal por registro para evitar contabilizarlas cada frame.
 - Se retiraron del ciclo del juego el prompt contextual de `Quédate aquí` y el prompt manual de recuperación con E. Los valores antiguos `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se quitan del INI al cargar la extensión; los estados persistentes `Waiting`/ `ReturningToPosition` se migran a `Following`.
 - La ruta de ayuda automática a compañeros incapacitados se conserva; ya no se muestra la interacción manual con E.
 - Revisión de código fuente únicamente. No se pudo compilar ni probar dentro de RDR2 en este entorno; verificar en el juego que saludo/provocación ajusten el medidor correcto y que los compañeros sigan normalmente después de cargar estados antiguos.
