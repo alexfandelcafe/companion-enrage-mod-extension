@@ -5,6 +5,7 @@ using System.IO;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using RDR2;
 using RDR2.Math;
@@ -31,6 +32,7 @@ namespace EnRAGECompanionsExtension
         private static MethodInfo _updateSocial;
         private static MethodInfo _socialTarget;
         private static MethodInfo _recordAt;
+        private static MethodInfo _regardOfRecord;
         private static MethodInfo _roleOf;
         private static MethodInfo _whoIs;
         private static MethodInfo _makePrompt;
@@ -58,6 +60,23 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
+        // Use three separate actions for the custom prompts: context-no (F on the default layout),
+        // reload (R), and context-yes (E). Do not reuse E for normal orders: this was competing with
+        // the game's native interaction prompt on some target groups and made the G action disappear.
+        private const int IndividualOrderPromptControl = unchecked((int)0xDFF812F9); // F / context-no
+        private const int CombatStancePromptControl = -2074855166; // H; medicine prompt is hidden during combat
+        private static int _combatStancePrompt;
+        private static int _combatStancePromptFor;
+        private static int _combatStancePromptGroup;
+        private static bool _combatStancePromptArmed;
+        private static Ped _combatStancePromptPed;
+        private static string _combatStancePromptLabel;
+        private static int _individualOrderPrompt;
+        private static int _individualOrderPromptFor;
+        private static int _individualOrderPromptGroup;
+        private static bool _individualOrderPromptArmed;
+        private static Ped _individualOrderPromptPed;
+        private static string _individualOrderPromptLabel;
         private static int _maxCompanions = 3;
         // Default affiliation is Van der Linde for compatibility. Both settings can target an
         // existing faction in enRAGE; the player-friendly relationship group is independent of it.
@@ -65,6 +84,49 @@ namespace EnRAGECompanionsExtension
         private static string _recruitRosterId = "vdl";
         private static bool _allowFriendlyFire = true;
         private static bool _preventTargeting;
+        private static bool _enableAffinity = true;
+        private static int _affinityTravelIntervalSeconds = 300;
+        private static int _affinityTravelGain = 1;
+        private static int _affinityCombatGain = 2;
+        private static int _affinityTreatmentGain = 3;
+        private static bool _enableIndividualOrders = true;
+        private static bool _enableWaitMode = true;
+        private static float _waitRadius = 8.0f;
+        private static bool _enableInjurySystem = true;
+        private static int _injuryDamageThresholdPercent = 10;
+        private static int _injuryRecoverySeconds = 180;
+        private static int _medicineHealingPercent = 100;
+        private static int _medicineRecoveryReductionSeconds = 60;
+        private static int _recruitMedicineCostCents = 100;
+        private static readonly Dictionary<string, string> DefaultExtensionTexts = CreateDefaultExtensionTexts();
+        private static readonly Dictionary<string, string> ExtensionTexts =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastIndividualOrderTaskAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastObservedHealthById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastDamageBaselineById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastHealthSampleAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastInjuryRecoveryAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastInjuryPersistAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static int _lastPlayerWeaponFireAt = -100000;
+        private static readonly Dictionary<string, int> LastMedicineTransactionAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastPlayerFireAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private sealed class AffinityTravelTracker
+        {
+            internal int StartedAt;
+            internal Vector3 StartPosition;
+        }
+        private static readonly Dictionary<string, AffinityTravelTracker> AffinityTravelTrackers =
+            new Dictionary<string, AffinityTravelTracker>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastAffinityCombatAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastStoryRosterSyncAt = -100000;
         private static int _lastRelationshipMaintenanceAt = -100000;
         private static int _lastRecruitFriendshipMaintenanceAt = -100000;
@@ -81,15 +143,9 @@ namespace EnRAGECompanionsExtension
             internal Ped Ped;
         }
         // A dismissed ambient ped keeps this association for the current session, so recruiting the
-        // same entity again reuses its persistent sheet instead of creating "Aliado 2", "Aliado 3", etc.
+        // same entity again reuses its persistent enRAGE roster record instead of creating a duplicate.
         private static readonly Dictionary<int, CachedRosterRecord> RosterRecordsByPedHandle = new Dictionary<int, CachedRosterRecord>();
         private static readonly Dictionary<string, uint> RecruitedRosterModels = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
-        // RDR2 meta-ped outfit hashes are saved by stable roster ID. ModelHash alone is not enough:
-        // several world outfit variants can share the same ped model.
-        private static readonly Dictionary<string, uint> RecruitedOutfitHashes = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
-        private static bool _loggedOutfitGetterUnavailable;
-        private static bool _loggedOutfitEquipUnavailable;
-        private static readonly HashSet<string> OutfitCaptureFailureLogged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<int, string> AppliedPromptNames = new Dictionary<int, string>();
         private static readonly Dictionary<int, int> CustomCompanionCombatTargets = new Dictionary<int, int>();
         private static readonly Dictionary<int, int> CustomCombatSuppressedAt = new Dictionary<int, int>();
@@ -102,9 +158,7 @@ namespace EnRAGECompanionsExtension
         private static readonly HashSet<string> PendingFullHealthIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> ExiledRosterIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static string _pendingKickRosterRecordId;
-        private const int RecruitMedicineCostCents = 100; // $1.00
-        // Use the distinct paper/interact control rather than the same key as Saludar/Provocar/
-        // Dejar de seguirme, otherwise RDR2 may suppress this second prompt in the same target group.
+        // The treatment prompt is H by default and remains separate from enRAGE's G interaction.
         private const int RecruitMedicinePromptControl = -2074855166;
 
         internal static bool IsInstalled { get { return _installed; } }
@@ -131,6 +185,8 @@ namespace EnRAGECompanionsExtension
                 _updateSocial = FindMethod(_mainType, "UpdateSocial", 1, p => IsPedType(p[0].ParameterType));
                 _socialTarget = FindMethod(_mainType, "SocialTarget", 1, p => IsPedType(p[0].ParameterType));
                 _recordAt = FindMethod(_mainType, "RecordAt", 1, p => p[0].ParameterType == typeof(int));
+                _regardOfRecord = FindMethod(_mainType, "RegardOfRecord", 1,
+                    p => p[0].ParameterType.Name == "NemesisRecord");
                 _roleOf = FindMethod(_mainType, "RoleOf", 1, p => p[0].ParameterType == typeof(int));
                 _whoIs = FindMethod(_mainType, "WhoIs", 1, p => p[0].ParameterType == typeof(int));
                 _makePrompt = FindMethod(_mainType, "MakePrompt", 4, p =>
@@ -151,6 +207,8 @@ namespace EnRAGECompanionsExtension
                 MethodInfo updateCompanion = FindMethod(_mainType, "UpdateCompanion", 1, p => IsPedType(p[0].ParameterType));
                 MethodInfo ask = FindMethod(_mainType, "Ask", 3, p => IsPedType(p[0].ParameterType) && p[1].ParameterType == typeof(string) && IsPedType(p[2].ParameterType));
                 MethodInfo spawnCompanion = FindMethod(_mainType, "SpawnCompanion", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
+                MethodInfo waitToJoin = FindMethod(_mainType, "WaitToJoin", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
+                MethodInfo ride = FindMethod(_mainType, "Ride", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
                 MethodInfo cleanup = FindMethod(_mainType, "Cleanup", 1, p => p[0].ParameterType.Name == "Companion");
                 MethodInfo restoreReal = FindMethod(_mainType, "RestoreReal", 1, p => p[0].ParameterType.Name == "Companion");
 
@@ -164,6 +222,7 @@ namespace EnRAGECompanionsExtension
                 }
 
                 ReadConfiguration();
+                LoadExtensionTexts();
                 if (!IsConfiguredRecruitmentFactionAvailable())
                     Log("WARNING: configured enRAGE faction ID '" + _recruitGangId + "' was not found. Recruitment will be blocked until RecruitGangId is set to an existing faction ID.");
                 if (!string.Equals(_recruitGangId, _recruitRosterId, StringComparison.OrdinalIgnoreCase) &&
@@ -171,6 +230,7 @@ namespace EnRAGECompanionsExtension
                     Log("WARNING: for a custom faction, set RecruitGangId and RecruitRosterId to the same enRAGE faction ID so roster actions target that faction consistently.");
                 LoadPersistentRosterActions();
                 _harmony = new Harmony(HarmonyId);
+                TryPatchExtensionRecruitIntent();
                 _harmony.Patch(updateCompanion,
                     prefix: Hook(nameof(CompanionCyclePrefix)),
                     postfix: Hook(nameof(CompanionCyclePostfix)));
@@ -205,12 +265,18 @@ namespace EnRAGECompanionsExtension
                 if (_whoIs != null)
                     _harmony.Patch(_whoIs, postfix: Hook(nameof(WhoIsPostfix)));
                 _harmony.Patch(spawnCompanion, prefix: Hook(nameof(SpawnCompanionPrefix)));
+                // Waiting extension recruits must not have enRAGE's stock movement
+                // methods overwrite the order task after UpdateCompanion runs.
+                if (waitToJoin != null) _harmony.Patch(waitToJoin, prefix: Hook(nameof(CompanionMovementOrderPrefix)));
+                if (ride != null) _harmony.Patch(ride, prefix: Hook(nameof(CompanionMovementOrderPrefix)));
                 // enRAGE's stock CompanionFight attacks every hated target around the player once
                 // any nearby combat starts. Extension recruits use a strict retaliatory policy.
                 _harmony.Patch(_companionFight, prefix: Hook(nameof(CompanionFightPrefix)));
 
                 if (_recordAt != null)
                     _harmony.Patch(_recordAt, postfix: Hook(nameof(RecordAtPostfix)));
+                if (_regardOfRecord != null)
+                    _harmony.Patch(_regardOfRecord, postfix: Hook(nameof(RegardOfRecordPostfix)));
 
                 if (cleanup != null)
                     _harmony.Patch(cleanup, postfix: Hook(nameof(CleanupPostfix)));
@@ -240,6 +306,81 @@ namespace EnRAGECompanionsExtension
             if (hook == null)
                 throw new MissingMethodException(typeof(EnRAGEHooks).FullName, name);
             return new HarmonyMethod(hook);
+        }
+
+        private static void TryPatchExtensionRecruitIntent()
+        {
+            try
+            {
+                Type recordType = _mainType.Assembly.GetType("NemesisSystem.NemesisRecord", false);
+                MethodInfo intentOf = recordType == null ? null : FindMethod(_mainType, "IntentOf", 1,
+                    p => p[0].ParameterType == recordType);
+                if (intentOf == null || !intentOf.ReturnType.IsEnum || !Enum.IsDefined(intentOf.ReturnType, "None"))
+                {
+                    Log("Intent override unavailable; enRAGE's own recruitment intent remains unchanged.");
+                    return;
+                }
+
+                PropertyInfo idProperty = recordType.GetProperty("Id", BindingFlags.Instance | BindingFlags.Public);
+                MethodInfo getId = idProperty == null ? null : idProperty.GetGetMethod();
+                MethodInfo startsWith = typeof(string).GetMethod("StartsWith", new[] { typeof(string), typeof(StringComparison) });
+                if (getId == null || startsWith == null)
+                {
+                    Log("Intent override unavailable; NemesisRecord.Id getter or string comparison method was not found.");
+                    return;
+                }
+
+                // Generate a prefix with exact runtime argument/enum types, without taking a compile-time
+                // reference to NemesisMod.dll. Extension recruits use stable extcomp_/extvdl_ IDs.
+                AssemblyBuilder assembly = AppDomain.CurrentDomain.DefineDynamicAssembly(
+                    new AssemblyName("EnRAGECompanionIntentRuntime_" + Guid.NewGuid().ToString("N")),
+                    AssemblyBuilderAccess.Run);
+                ModuleBuilder module = assembly.DefineDynamicModule("IntentPrefixModule");
+                TypeBuilder type = module.DefineType("IntentPrefix", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
+                MethodBuilder prefix = type.DefineMethod("Prefix", MethodAttributes.Public | MethodAttributes.Static,
+                    typeof(bool), new[] { recordType, intentOf.ReturnType.MakeByRefType() });
+                prefix.DefineParameter(1, ParameterAttributes.None, "__0");
+                prefix.DefineParameter(2, ParameterAttributes.None, "__result");
+
+                ILGenerator il = prefix.GetILGenerator();
+                LocalBuilder id = il.DeclareLocal(typeof(string));
+                Label original = il.DefineLabel();
+                Label extensionRecord = il.DefineLabel();
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Callvirt, getId);
+                il.Emit(OpCodes.Stloc, id);
+                il.Emit(OpCodes.Ldloc, id);
+                il.Emit(OpCodes.Brfalse_S, original);
+
+                il.Emit(OpCodes.Ldloc, id);
+                il.Emit(OpCodes.Ldstr, "extcomp_");
+                il.Emit(OpCodes.Ldc_I4, (int)StringComparison.OrdinalIgnoreCase);
+                il.Emit(OpCodes.Callvirt, startsWith);
+                il.Emit(OpCodes.Brtrue_S, extensionRecord);
+                il.Emit(OpCodes.Ldloc, id);
+                il.Emit(OpCodes.Ldstr, "extvdl_");
+                il.Emit(OpCodes.Ldc_I4, (int)StringComparison.OrdinalIgnoreCase);
+                il.Emit(OpCodes.Callvirt, startsWith);
+                il.Emit(OpCodes.Brfalse_S, original);
+
+                il.MarkLabel(extensionRecord);
+                il.Emit(OpCodes.Ldarg_1);
+                il.Emit(OpCodes.Ldc_I4, Convert.ToInt32(Enum.Parse(intentOf.ReturnType, "None"), CultureInfo.InvariantCulture));
+                il.Emit(OpCodes.Stind_I4);
+                il.Emit(OpCodes.Ldc_I4_0);
+                il.Emit(OpCodes.Ret);
+                il.MarkLabel(original);
+                il.Emit(OpCodes.Ldc_I4_1);
+                il.Emit(OpCodes.Ret);
+
+                Type prefixType = type.CreateType();
+                _harmony.Patch(intentOf, prefix: new HarmonyMethod(prefixType.GetMethod("Prefix")));
+                Log("Installed targeted Intent.None override for extension-recruited roster records.");
+            }
+            catch (Exception ex)
+            {
+                Log("Extension recruit intent override failed; neutral relationship values remain as fallback: " + Unwrap(ex));
+            }
         }
 
         // Track the active UpdateAsk call so MakePrompt can relabel only the extension recruit's
@@ -277,7 +418,7 @@ namespace EnRAGECompanionsExtension
                 object companion = GetField(_askContextInstance, "_askComp");
                 string key = GetField(companion, "Key") as string;
                 if (!string.IsNullOrEmpty(key) && key.StartsWith(KeyPrefix, StringComparison.Ordinal))
-                    __args[1] = "Dejar de seguirme";
+                    __args[1] = T("action.dismiss");
             }
             catch (Exception ex)
             {
@@ -294,39 +435,63 @@ namespace EnRAGECompanionsExtension
             SetField(__instance, "_companionsOffDone", true);
         }
 
+        private static bool CompanionMovementOrderPrefix(object __instance, object[] __args)
+        {
+            try
+            {
+                if (__args == null || __args.Length == 0) return true;
+                object companion = __args[0];
+                string key = GetField(companion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                    return true;
+
+                object record = GetField(companion, "Rec");
+                CompanionPersistentState state = GetPersistentState(record, false);
+                if (state == null) return true;
+                if (state.FollowState == CompanionFollowState.Waiting)
+                    return false;
+            }
+            catch (Exception ex) { Log("Companion movement order guard warning: " + Unwrap(ex)); }
+            return true;
+        }
+
         private static void CompanionCyclePostfix(object __instance, object[] __args)
         {
             try
             {
                 if (__args == null || __args.Length == 0 || !(__args[0] is Ped player) || player == null || !player.Exists())
                     return;
-
-                // The built-in Van der Linde faction has a separate StoryRoster; normal/custom factions
-                // appear through Roster filtered by each record's Gang ID. Exclusions are maintained for both.
+                try { if (PED.IS_PED_SHOOTING(player.Handle)) _lastPlayerWeaponFireAt = Game.GameTime; } catch { }
                 SyncVanDerLindeStoryRoster(__instance, false);
                 UpdateCachedRecruitedPedDeaths(__instance);
                 MaintainDismissedRecruitRelationships(__instance, player);
                 MaintainRecruitedFriendship(__instance);
                 MaintainRecruitedIdentity(__instance);
+                MaintainAffinityTravel(__instance, player);
 
-                // Keep enRAGE's original story-companion interaction. Generic NPCs use a separate
-                // native prompt, rather than mutating _askPed/_askKey and recursively re-entering UpdateAsk.
                 InvokeInstance(__instance, "UpdateAsk", player);
+
                 UpdateGenericRecruitPrompt(__instance, player);
+                UpdateCombatStancePrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
+                UpdateIndividualOrderPrompts(__instance, player);
 
                 IList list = GetField(__instance, "_comps") as IList;
-                if (list == null || list.Count == 0)
-                    return;
-
-                // Iterate over a snapshot: Ride/GoingHome/Cleanup can remove entries from _comps.
+                if (list == null || list.Count == 0) return;
                 object[] snapshot = list.Cast<object>().ToArray();
                 foreach (object companion in snapshot)
                 {
-                    if (companion == null)
-                        continue;
-
+                    if (companion == null) continue;
+                    MaintainCompanionCondition(__instance, companion, player);
                     MarkRecruitedCompanionDeath(__instance, companion);
+                    object companionRecord = GetField(companion, "Rec");
+                    if (companionRecord != null && GetMember(companionRecord, "IsAlive") is bool memberAlive && !memberAlive)
+                        continue;
+                    if (MaintainIndividualCompanionOrder(__instance, companion, player))
+                    {
+                        MaintainExtensionCompanionDamageability(companion, player);
+                        continue;
+                    }
                     int state = GetFieldInt(companion, "State", -1);
                     switch (state)
                     {
@@ -334,12 +499,10 @@ namespace EnRAGECompanionsExtension
                         case 1: InvokeInstance(__instance, "Ride", companion, player); break;
                         case 2: InvokeInstance(__instance, "GoingHome", companion, player); break;
                     }
+                    MaintainExtensionCompanionDamageability(companion, player);
                 }
             }
-            catch (Exception ex)
-            {
-                Log("Companion cycle error: " + Unwrap(ex));
-            }
+            catch (Exception ex) { Log("Companion cycle error: " + Unwrap(ex)); }
         }
 
         private static void RecordAtPostfix(int __0, ref object __result)
@@ -351,14 +514,11 @@ namespace EnRAGECompanionsExtension
                 if (RosterRecordsByPedHandle.TryGetValue(__0, out cached) && cached != null && cached.Record != null)
                 {
                     __result = cached.Record;
-                    // Keep retrying outfit capture if the native returned zero during initial loading.
-                    CaptureRecruitOutfitIfMissing(cached.Record, cached.Ped);
                     return;
                 }
 
-                // Migration path for recruits created by older builds: after updating the extension,
-                // enRAGE can still resolve their extcomp_/extvdl_ roster record. Capture the current
-                // outfit before that world entity streams away, even if it predates the outfit file.
+                // Recovery path for records created by older builds: associate the live ped
+                // with its existing roster record without creating a duplicate entry.
                 object record = __result;
                 string id = GetMember(record, "Id") as string;
                 uint modelHash = ConvertToUInt32(GetMember(record, "ModelHash"));
@@ -371,9 +531,8 @@ namespace EnRAGECompanionsExtension
                 if (ped == null || !ped.Exists() || ped.IsDead || unchecked((uint)ped.Model.Hash) != modelHash)
                     return;
                 CacheRosterRecord(__0, modelHash, record, ped);
-                CaptureRecruitOutfitIfMissing(record, ped);
             }
-            catch (Exception ex) { Log("RecordAt roster/outfit migration warning: " + Unwrap(ex)); }
+            catch (Exception ex) { Log("RecordAt roster migration warning: " + Unwrap(ex)); }
         }
 
         private static void WhoIsPostfix(int __0, ref string __result)
@@ -421,7 +580,8 @@ namespace EnRAGECompanionsExtension
             // the original social menu could reappear when those conditions change.
             if (target != null && IsCachedRecruitedPed(target.Handle))
             {
-                _preferredGenericPed = null;
+                // Released recruits remain eligible for a direct "call back" prompt.
+                _preferredGenericPed = target;
                 InvokeInstance(__instance, "UpdateHatAnim", player);
                 InvokeInstance(__instance, "HideSocialPrompt");
                 return false;
@@ -539,6 +699,347 @@ namespace EnRAGECompanionsExtension
             return string.Equals(id, "vdl", StringComparison.OrdinalIgnoreCase) ? "Van der Linde" : id;
         }
 
+        private static CompanionPersistentState GetPersistentState(object record, bool create)
+        {
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            CompanionStateStore store = CompanionStateRuntime.Store;
+            if (store == null) return null;
+            CompanionPersistentState state;
+            if (store.TryGet(id, out state)) return state;
+            if (!create) return null;
+            state = store.GetOrCreate(id);
+            if (store.IsDirty) store.SaveIfDirty();
+            return state;
+        }
+
+        private static void SavePersistentState(CompanionPersistentState state)
+        {
+            if (state == null) return;
+            CompanionStateStore store = CompanionStateRuntime.Store;
+            if (store == null) return;
+            try
+            {
+                store.MarkChanged(state);
+                store.SaveIfDirty();
+            }
+            catch (Exception ex) { Log("Companion state save warning: " + Unwrap(ex)); }
+        }
+
+        private static object FindActiveExtensionCompanion(object instance, string recordId)
+        {
+            if (instance == null || string.IsNullOrWhiteSpace(recordId)) return null;
+            IList companions = GetField(instance, "_comps") as IList;
+            if (companions == null) return null;
+
+            foreach (object companion in companions)
+            {
+                string key = GetField(companion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+                    continue;
+                object record = GetField(companion, "Rec");
+                string currentId = GetMember(record, "Id") as string;
+                if (string.Equals(currentId, recordId, StringComparison.OrdinalIgnoreCase))
+                    return companion;
+                string stableKey = KeyPrefix + "roster_" + recordId;
+                if (string.Equals(key, stableKey, StringComparison.OrdinalIgnoreCase))
+                    return companion;
+            }
+            return null;
+        }
+        private static void SetPersistentFollowState(object record, CompanionFollowState followState, Ped anchorPed)
+        {
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) return;
+            if (followState == CompanionFollowState.Resting)
+                followState = CompanionFollowState.Following;
+
+            state.FollowState = followState;
+            if (followState == CompanionFollowState.Waiting)
+            {
+                Ped anchor = anchorPed;
+                if (anchor == null || !anchor.Exists()) anchor = Game.Player.Character;
+                if (anchor != null && anchor.Exists())
+                {
+                    var pos = anchor.Position;
+                    state.SavedPosition.HasValue = true;
+                    state.SavedPosition.X = pos.X;
+                    state.SavedPosition.Y = pos.Y;
+                    state.SavedPosition.Z = pos.Z;
+                    try { state.SavedPosition.Heading = anchor.Heading; } catch { state.SavedPosition.Heading = 0f; }
+                }
+            }
+            else if (state.SavedPosition != null)
+                state.SavedPosition.HasValue = false;
+            SavePersistentState(state);
+        }
+        private static void SetIndividualCompanionOrder(object instance, object record, CompanionFollowState order)
+        {
+            if (instance == null || record == null || !_enableIndividualOrders) return;
+            if (order != CompanionFollowState.Waiting && order != CompanionFollowState.Following) return;
+            if (order == CompanionFollowState.Waiting && !_enableWaitMode)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "El modo de espera está desactivado en el archivo INI.");
+                return;
+            }
+
+            string id = GetMember(record, "Id") as string;
+            object companion = FindActiveExtensionCompanion(instance, id);
+            if (companion == null)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "Primero debes llamar a este compañero desde el roster.");
+                return;
+            }
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo localizar al compañero para aplicar la orden.");
+                return;
+            }
+
+            SetPersistentFollowState(record, order, ped);
+            LastIndividualOrderTaskAt.Remove(id ?? string.Empty);
+            try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
+            SetField(companion, "State", order == CompanionFollowState.Waiting ? 1 : 0);
+            SetField(companion, "AskedAt", Game.GameTime);
+            if (order == CompanionFollowState.Following)
+            {
+                InvokeInstance(instance, "ShowSubtitle", TF("order.following", GetMember(record, "Name") as string ?? T("companion.default")));
+                return;
+            }
+            if (ped.IsOnMount)
+                try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
+            CompanionPersistentState waitingState = GetPersistentState(record, false);
+            if (waitingState != null) MaintainAnchoredCompanionTask(id, ped, waitingState);
+            InvokeInstance(instance, "ShowSubtitle", TF("order.waiting", GetMember(record, "Name") as string ?? T("companion.default")));
+        }
+        private static bool MaintainIndividualCompanionOrder(object instance, object companion, Ped player)
+        {
+            if (!_enableIndividualOrders || companion == null) return false;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return false;
+            object record = GetField(companion, "Rec");
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            CompanionPersistentState state = GetPersistentState(record, false);
+            if (state == null) return false;
+
+            // Migrate a saved Resting state from old builds to normal Following.
+            if (state.FollowState == CompanionFollowState.Resting)
+            {
+                state.FollowState = CompanionFollowState.Following;
+                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
+                SavePersistentState(state);
+                return false;
+            }
+            if (state.FollowState == CompanionFollowState.Waiting && !_enableWaitMode)
+            {
+                state.FollowState = CompanionFollowState.Following;
+                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
+                SavePersistentState(state);
+                return false;
+            }
+            if (state.FollowState != CompanionFollowState.Waiting) return false;
+
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead) return true;
+            MaintainAnchoredCompanionTask(id, ped, state);
+            return true;
+        }
+        private static void MaintainAnchoredCompanionTask(string id, Ped ped, CompanionPersistentState state)
+        {
+            if (ped == null || !ped.Exists() || state == null) return;
+            if (state.SavedPosition == null) state.SavedPosition = new CompanionSavedPosition();
+            if (!state.SavedPosition.HasValue)
+            {
+                var pos = ped.Position;
+                state.SavedPosition.HasValue = true;
+                state.SavedPosition.X = pos.X; state.SavedPosition.Y = pos.Y; state.SavedPosition.Z = pos.Z;
+                try { state.SavedPosition.Heading = ped.Heading; } catch { state.SavedPosition.Heading = 0f; }
+                SavePersistentState(state);
+            }
+
+            int now = Game.GameTime, last;
+            if (LastIndividualOrderTaskAt.TryGetValue(id, out last) && now >= last && now - last < 1400) return;
+            LastIndividualOrderTaskAt[id] = now;
+            if (ped.IsOnMount)
+            {
+                try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
+                return;
+            }
+
+            float dx = ped.Position.X - state.SavedPosition.X;
+            float dy = ped.Position.Y - state.SavedPosition.Y;
+            float dz = ped.Position.Z - state.SavedPosition.Z;
+            if ((float)Math.Sqrt(dx * dx + dy * dy + dz * dz) > _waitRadius)
+            {
+                if (!TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD", new object[] { ped.Handle, state.SavedPosition.X, state.SavedPosition.Y, state.SavedPosition.Z, 1.0f, 10000, state.SavedPosition.Heading, 1.0f }))
+                    Log("TASK_GO_STRAIGHT_TO_COORD wrapper unavailable; held companion " + id + " could not return.");
+            }
+            else if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
+                TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
+        }
+        private static bool TryInvokeNativeWrapper(Type nativeType, string methodName, object[] args)
+        {
+            try
+            {
+                if (nativeType == null) return false;
+                MethodInfo method = nativeType.GetMethods(StaticFlags).FirstOrDefault(candidate =>
+                    string.Equals(candidate.Name, methodName, StringComparison.OrdinalIgnoreCase) &&
+                    candidate.GetParameters().Length == args.Length);
+                if (method == null) return false;
+
+                ParameterInfo[] parameters = method.GetParameters();
+                object[] converted = new object[args.Length];
+                for (int i = 0; i < args.Length; i++)
+                {
+                    object value = args[i];
+                    Type targetType = parameters[i].ParameterType;
+                    if (value == null || targetType.IsInstanceOfType(value))
+                        converted[i] = value;
+                    else if (targetType.IsEnum)
+                        converted[i] = Enum.ToObject(targetType, value);
+                    else
+                        converted[i] = Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
+                }
+                method.Invoke(null, converted);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("Native wrapper invocation failed for " + methodName + ": " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        private static bool TryInvokeTaskNative(string methodName, object[] args)
+        {
+            try
+            {
+                MethodInfo method = typeof(TASK).GetMethods(StaticFlags).FirstOrDefault(candidate =>
+                    string.Equals(candidate.Name, methodName, StringComparison.OrdinalIgnoreCase) &&
+                    candidate.GetParameters().Length == args.Length);
+                if (method == null) return false;
+
+                ParameterInfo[] parameters = method.GetParameters();
+                object[] converted = new object[args.Length];
+                for (int i = 0; i < args.Length; i++)
+                {
+                    object value = args[i];
+                    Type targetType = parameters[i].ParameterType;
+                    if (value == null || targetType.IsInstanceOfType(value))
+                        converted[i] = value;
+                    else if (targetType.IsEnum)
+                        converted[i] = Enum.ToObject(targetType, value);
+                    else
+                        converted[i] = Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
+                }
+                method.Invoke(null, converted);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("Task invocation failed for " + methodName + ": " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        private static int ChangeAffinity(object record, int delta)
+        {
+            if (!_enableAffinity) return -1;
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null) return -1;
+            state.Affinity = Math.Max(0, Math.Min(100, state.Affinity + delta));
+            SavePersistentState(state);
+            return state.Affinity;
+        }
+
+        private static void RegardOfRecordPostfix(object __0, ref int __result)
+        {
+            try
+            {
+                // enRAGE's native story relationship display calls RegardOfRecord(NemesisRecord).
+                // Its stock implementation only recognizes vdl_ IDs, so extension recruits need
+                // their persistent 0-100 affinity mapped to the native -100..100 regard scale.
+                if (!IsRecruitedRosterRecord(__0)) return;
+                CompanionPersistentState state = GetPersistentState(__0, true);
+                if (state == null) return;
+                __result = Math.Max(-100, Math.Min(100, state.Affinity * 2 - 100));
+            }
+            catch (Exception ex) { Log("Native story regard meter sync warning: " + Unwrap(ex)); }
+        }
+
+        private static void AwardAffinity(object record, int gain, string reason)
+        {
+            if (!_enableAffinity || gain <= 0 || record == null) return;
+            int affinity = ChangeAffinity(record, gain);
+            if (affinity >= 0)
+                Log("Affinity +" + gain + " (" + reason + ") for " +
+                    ((GetMember(record, "Name") as string) ?? (GetMember(record, "Id") as string)) + "; now " + affinity + "/100.");
+        }
+
+        private static void MaintainAffinityTravel(object instance, Ped player)
+        {
+            if (!_enableAffinity || _affinityTravelGain <= 0 || _affinityTravelIntervalSeconds <= 0 ||
+                instance == null || player == null || !player.Exists()) return;
+
+            int now = Game.GameTime;
+            IList companions = GetField(instance, "_comps") as IList;
+            if (companions == null) return;
+            HashSet<string> activeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (object companion in companions.Cast<object>().ToArray())
+            {
+                string key = GetField(companion, "Key") as string;
+                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                    GetFieldInt(companion, "State", 2) == 2) continue;
+
+                object record = GetField(companion, "Rec");
+                string id = GetMember(record, "Id") as string;
+                if (string.IsNullOrWhiteSpace(id)) continue;
+
+                Ped ped = GetField(companion, "Ped") as Ped;
+                if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+                if (ped == null || !ped.Exists() || ped.IsDead || ped.Position.DistanceTo(player.Position) > 60f)
+                {
+                    AffinityTravelTrackers.Remove(id);
+                    continue;
+                }
+
+                activeIds.Add(id);
+                AffinityTravelTracker tracker;
+                if (!AffinityTravelTrackers.TryGetValue(id, out tracker))
+                {
+                    AffinityTravelTrackers[id] = new AffinityTravelTracker { StartedAt = now, StartPosition = player.Position };
+                    continue;
+                }
+
+                if (now < tracker.StartedAt || now - tracker.StartedAt < _affinityTravelIntervalSeconds * 1000)
+                    continue;
+
+                bool travelled = player.Position.DistanceTo(tracker.StartPosition) >= 100f;
+                tracker.StartedAt = now;
+                tracker.StartPosition = player.Position;
+                if (travelled) AwardAffinity(record, _affinityTravelGain, "travel");
+            }
+
+            foreach (string id in AffinityTravelTrackers.Keys.ToArray())
+                if (!activeIds.Contains(id)) AffinityTravelTrackers.Remove(id);
+        }
+
+        private static void AdjustAffinityFromRoster(object instance, object record, int delta)
+        {
+            int affinity = ChangeAffinity(record, delta);
+            if (affinity < 0)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "La afinidad está desactivada en el archivo INI.");
+                return;
+            }
+            string name = GetMember(record, "Name") as string ?? T("companion.default");
+            InvokeInstance(instance, "ShowSubtitle", TF("affinity.status", name, affinity));
+        }
         private static void DetailActionsPostfix(object __instance, ref List<string> __result)
         {
             try
@@ -552,14 +1053,14 @@ namespace EnRAGECompanionsExtension
                     !string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                     _pendingKickRosterRecordId = null;
 
-                // An expelled member must not quietly reappear as callable just because the old
-                // session cache still identifies its record as an extension recruit.
+                string call = T("action.call"), kick = T("action.kick");
+                string confirm = T("action.kick.confirm"), cancel = T("action.kick.cancel");
                 if (ExiledRosterIds.Contains(id))
                 {
-                    __result.Remove("Llamarlo");
-                    __result.Remove("Echar de la banda");
-                    __result.Remove("Confirmar expulsión");
-                    __result.Remove("Cancelar expulsión");
+                    __result.Remove("Llamarlo"); __result.Remove(call);
+                    __result.Remove("Echar de la banda"); __result.Remove(kick);
+                    __result.Remove("Confirmar expulsión"); __result.Remove(confirm);
+                    __result.Remove("Cancelar expulsión"); __result.Remove(cancel);
                     return;
                 }
 
@@ -568,36 +1069,39 @@ namespace EnRAGECompanionsExtension
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
                 if (recruitedRecord)
                 {
-                    __result.Remove("Llamarlo");
+                    // Affinity is shown through enRAGE's native RegardOfRecord relationship meter;
+                    // do not add a second, extension-owned affinity UI to the detail actions.
+                    __result.RemoveAll(action => action != null &&
+                        (action == "Mejorar afinidad (+10)" || action == "Reducir afinidad (-10)" ||
+                         action.IndexOf("afinidad", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         action.IndexOf("affinity", StringComparison.OrdinalIgnoreCase) >= 0));
+                    __result.Remove("Llamarlo"); __result.Remove(call);
                     if (!alreadyFollowing && (!(GetMember(record, "IsAlive") is bool alive) || alive))
-                        InsertBeforeBack(__result, "Llamarlo");
+                        InsertBeforeBack(__result, call);
                 }
 
-                // Any roster member currently attached to the companion system is protected from
-                // expulsion, not just extension recruits. Once dismissed, the record can be removed.
                 if (anyCompanionFollowing)
                 {
-                    __result.Remove("Echar de la banda");
-                    __result.Remove("Confirmar expulsión");
-                    __result.Remove("Cancelar expulsión");
+                    __result.Remove("Echar de la banda"); __result.Remove(kick);
+                    __result.Remove("Confirmar expulsión"); __result.Remove(confirm);
+                    __result.Remove("Cancelar expulsión"); __result.Remove(cancel);
                     return;
                 }
-
                 if (!IsKickableRosterRecord(_latestMainInstance, record)) return;
                 if (string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                 {
-                    int kickIndex = __result.IndexOf("Echar de la banda");
-                    if (kickIndex >= 0)
-                        __result[kickIndex] = "Confirmar expulsión";
-                    else
-                        InsertBeforeBack(__result, "Confirmar expulsión");
-                    InsertBeforeBack(__result, "Cancelar expulsión");
+                    int index = __result.IndexOf("Echar de la banda");
+                    if (index < 0) index = __result.IndexOf(kick);
+                    if (index >= 0) __result[index] = confirm;
+                    else InsertBeforeBack(__result, confirm);
+                    InsertBeforeBack(__result, cancel);
                 }
                 else
                 {
-                    __result.Remove("Confirmar expulsión");
-                    __result.Remove("Cancelar expulsión");
-                    InsertBeforeBack(__result, "Echar de la banda");
+                    __result.Remove("Confirmar expulsión"); __result.Remove(confirm);
+                    __result.Remove("Cancelar expulsión"); __result.Remove(cancel);
+                    __result.Remove(kick);
+                    InsertBeforeBack(__result, kick);
                 }
             }
             catch (Exception ex) { Log("Roster action injection warning: " + Unwrap(ex)); }
@@ -643,9 +1147,11 @@ namespace EnRAGECompanionsExtension
                 if (actions == null || selected < 0 || selected >= actions.Count) return true;
                 string action = actions[selected];
                 string recordIdForConfirmation = GetMember(record, "Id") as string;
+                bool navigationAction = action == "Atrás" || action == "Back" || action == "Volver" ||
+                    action == "Cerrar" || action == "Close";
                 if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
                     string.Equals(_pendingKickRosterRecordId, recordIdForConfirmation, StringComparison.OrdinalIgnoreCase) &&
-                    action != "Confirmar expulsión" && action != "Cancelar expulsión" && action != "Echar de la banda")
+                    action != T("action.kick.confirm") && action != T("action.kick.cancel") && action != T("action.kick"))
                 {
                     // Leaving the confirmation row or choosing another action abandons the pending
                     // decision; reopening the same sheet must not silently preserve old confirmation.
@@ -655,7 +1161,7 @@ namespace EnRAGECompanionsExtension
                 bool recruitedRecord = IsRecruitedRosterRecord(record);
                 bool alreadyFollowing = recruitedRecord && IsRecruitedRecordAlreadyFollowing(_latestMainInstance, record);
                 bool anyCompanionFollowing = IsRosterRecordCurrentlyFollowing(_latestMainInstance, record);
-                if (action == "Llamarlo" && recruitedRecord)
+                if (action == T("action.call") && recruitedRecord)
                 {
                     if (alreadyFollowing)
                     {
@@ -667,7 +1173,7 @@ namespace EnRAGECompanionsExtension
                 }
                 if (ExiledRosterIds.Contains(recordIdForConfirmation))
                     return true;
-                if (anyCompanionFollowing && (action == "Echar de la banda" || action == "Confirmar expulsión"))
+                if (anyCompanionFollowing && (action == T("action.kick") || action == T("action.kick.confirm")))
                 {
                     InvokeInstance(_latestMainInstance, "ShowSubtitle", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero.");
                     return false;
@@ -675,16 +1181,16 @@ namespace EnRAGECompanionsExtension
 
                 if (!IsKickableRosterRecord(_latestMainInstance, record)) return true;
                 string id = GetMember(record, "Id") as string;
-                if (action == "Echar de la banda")
+                if (action == T("action.kick"))
                 {
                     _pendingKickRosterRecordId = id;
                     SetField(__instance, "_action", selected);
                     InvokeInstance(_latestMainInstance, "ShowSubtitle",
-                        "Aviso: la expulsión es irreversible y podría tener consecuencias para ti en el futuro. Elige Confirmar expulsión para continuar.");
+                        TF("subtitle.kick.warning", T("action.kick.confirm")));
                     Log("Requested confirmation before expelling story roster member " + id + ".");
                     return false;
                 }
-                if (action == "Confirmar expulsión")
+                if (action == T("action.kick.confirm"))
                 {
                     if (!string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                     {
@@ -697,7 +1203,7 @@ namespace EnRAGECompanionsExtension
                     SetField(__instance, "_action", 0);
                     return false;
                 }
-                if (action == "Cancelar expulsión")
+                if (action == T("action.kick.cancel"))
                 {
                     _pendingKickRosterRecordId = null;
                     SetField(__instance, "_action", 0);
@@ -829,12 +1335,12 @@ namespace EnRAGECompanionsExtension
         {
             if (instance == null || record == null) return;
             string id = GetMember(record, "Id") as string;
-            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? "Compañero";
+            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? T("companion.default");
             if (string.IsNullOrWhiteSpace(id) || !IsRecruitedRosterRecord(record)) return;
             if (IsExiledRosterRecord(record))
             {
                 HideRecruitMedicinePrompt();
-                InvokeInstance(instance, "ShowSubtitle", name + " ya fue expulsado de la banda y no puede recibir remedios.");
+                InvokeInstance(instance, "ShowSubtitle", TF("medicine.exiled", name));
                 return;
             }
             if (GetMember(record, "IsAlive") is bool alive && !alive)
@@ -846,7 +1352,8 @@ namespace EnRAGECompanionsExtension
             // The prompt is tied to the exact targeted entity. Do not charge for a stale target,
             // and do not silently heal a different pedestrian that happens to share the same model.
             CachedRosterRecord targetedCache;
-            if (targetedPed == null || !targetedPed.Exists() || targetedPed.IsDead ||
+            if (targetedPed == null || !targetedPed.Exists() ||
+                targetedPed.IsDead ||
                 !RosterRecordsByPedHandle.TryGetValue(targetedPed.Handle, out targetedCache) ||
                 targetedCache == null || targetedCache.Record == null ||
                 !string.Equals(GetMember(targetedCache.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
@@ -856,11 +1363,14 @@ namespace EnRAGECompanionsExtension
             }
 
             Ped ped = targetedPed;
-            if (ped != null && ped.Health >= ped.MaxHealth)
+            CompanionPersistentState preTreatmentState = GetPersistentState(record, false);
+            bool injuryNeedsTreatment = preTreatmentState != null && preTreatmentState.Injury != null &&
+                preTreatmentState.Injury.IsInjured;
+            if (ped != null && ped.Health >= ped.MaxHealth && !injuryNeedsTreatment)
             {
                 if (PendingFullHealthIds.Remove(id))
                     SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-                InvokeInstance(instance, "ShowSubtitle", name + " ya tiene la salud al máximo.");
+                InvokeInstance(instance, "ShowSubtitle", TF("medicine.full_health", name));
                 return;
             }
 
@@ -872,24 +1382,63 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(instance, "ShowSubtitle", "No se pudo comprobar el dinero disponible.");
                 return;
             }
-            if (cash < RecruitMedicineCostCents)
+            if (cash < _recruitMedicineCostCents)
             {
-                InvokeInstance(instance, "ShowSubtitle", "Necesitas 1 dólar para comprar el remedio.");
+                InvokeInstance(instance, "ShowSubtitle", TF("medicine.insufficient_cash",
+                    (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture)));
                 return;
             }
 
-            try { MONEY._MONEY_DECREMENT_CASH_BALANCE(RecruitMedicineCostCents); }
+            int now = Game.GameTime;
+            int lastTransaction;
+            if (LastMedicineTransactionAt.TryGetValue(id, out lastTransaction) &&
+                now >= lastTransaction && now - lastTransaction < 2000)
+            {
+                InvokeInstance(instance, "ShowSubtitle", "El remedio ya se está procesando; no se cobró otra vez.");
+                return;
+            }
+            // Claim this record before debiting cash. If a duplicate prompt fires while the native
+            // call completes, it cannot charge twice during the same transaction window.
+            LastMedicineTransactionAt[id] = now;
+            try { if (_recruitMedicineCostCents > 0) MONEY._MONEY_DECREMENT_CASH_BALANCE(_recruitMedicineCostCents); }
             catch (Exception ex)
             {
                 Log("Medicine payment failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo cobrar el remedio; no se aplicó la curación.");
+                InvokeInstance(instance, "ShowSubtitle", "No se pudo confirmar el cobro; espera un momento antes de volver a intentarlo.");
                 return;
             }
 
-            HealPedToMaximum(ped);
+            bool treatmentApplied = false;
+            try { treatmentApplied = ApplyConfiguredMedicineHealing(ped); }
+            catch (Exception ex) { Log("Medicine treatment failed for " + id + ": " + Unwrap(ex)); }
+            if (!treatmentApplied)
+            {
+                bool refunded = TryRefundMedicineCharge(_recruitMedicineCostCents);
+                InvokeInstance(instance, "ShowSubtitle", refunded
+                    ? "El remedio no pudo aplicarse; se devolvió el cobro."
+                    : "El remedio no pudo aplicarse y no se pudo confirmar la devolución. Revisa el registro del mod.");
+                if (!refunded)
+                    Log("CRITICAL: medicine treatment failed and refund could not be confirmed for " + id + ".");
+                return;
+            }
+
+            CompanionPersistentState injuryState = GetPersistentState(record, true);
+            if (injuryState != null && injuryState.Injury != null && injuryState.Injury.IsInjured)
+            {
+                injuryState.Injury.RecoverySecondsRemaining = Math.Max(0,
+                    injuryState.Injury.RecoverySecondsRemaining - _medicineRecoveryReductionSeconds);
+                if (injuryState.Injury.RecoverySecondsRemaining <= 0)
+                {
+                    injuryState.Injury.IsInjured = false;
+                    injuryState.Injury.Severity = 0;
+                    injuryState.Injury.FirstInjuredUtcTicks = 0;
+                }
+                SavePersistentState(injuryState);
+            }
+            AwardAffinity(record, _affinityTreatmentGain, "treatment");
             PendingFullHealthIds.Remove(id);
             SavePersistentIdSet("EnRAGECompanionsExtension.pending-heals.txt", PendingFullHealthIds);
-            InvokeInstance(instance, "ShowSubtitle", name + " recuperó toda su salud. Coste: 1 dólar.");
+            InvokeInstance(instance, "ShowSubtitle", TF("medicine.success", name, _medicineHealingPercent, (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture)));
             Log("Applied contextual medicine to " + name + " (record=" + id + ").");
         }
 
@@ -927,6 +1476,48 @@ namespace EnRAGECompanionsExtension
             return null;
         }
 
+        private static bool ApplyConfiguredMedicineHealing(Ped ped)
+        {
+            if (ped == null || !ped.Exists() || ped.IsDead) return false;
+
+            try
+            {
+                int maxHealth = ped.MaxHealth;
+                if (maxHealth <= 0) return false;
+
+                int previousHealth = ped.Health;
+                int amount = Math.Max(1, (int)Math.Ceiling(maxHealth * _medicineHealingPercent / 100.0));
+                int targetHealth = Math.Min(maxHealth, Math.Max(1, previousHealth) + amount);
+                if (targetHealth > previousHealth)
+                    ped.Health = targetHealth;
+
+                // Do not report a successful treatment just because the setter did not throw.
+                // The native ped must still exist, be alive, and expose the requested health.
+                return ped.Exists() && !ped.IsDead && ped.Health >= targetHealth && ped.Health > 0;
+            }
+            catch (Exception ex)
+            {
+                Log("Could not apply or verify companion medicine: " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        private static bool TryRefundMedicineCharge(int amountCents)
+        {
+            if (amountCents <= 0) return true;
+            try
+            {
+                // Signature confirmed in the bundled enRAGE decompilation: cents plus an add-reason hash.
+                MONEY._MONEY_INCREMENT_CASH_BALANCE(amountCents, MISC.GET_HASH_KEY("ADD_REASON_DEFAULT"));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log("Medicine refund failed: " + Unwrap(ex));
+                return false;
+            }
+        }
+
         private static void HealPedToMaximum(Ped ped)
         {
             if (ped == null || !ped.Exists() || ped.IsDead) return;
@@ -951,210 +1542,6 @@ namespace EnRAGECompanionsExtension
             LoadPersistentIdSet("EnRAGECompanionsExtension.exiled-roster.txt", ExiledRosterIds);
             // Compatibility with the legacy filename used by previous Van der Linde-only builds.
             LoadPersistentIdSet("EnRAGECompanionsExtension.exiled-story-roster.txt", ExiledRosterIds);
-            LoadPersistentRecruitOutfits();
-        }
-
-        private static void LoadPersistentRecruitOutfits()
-        {
-            try
-            {
-                string path = ResolveScriptsFile("EnRAGECompanionsExtension.outfits.txt");
-                if (!File.Exists(path)) return;
-                foreach (string raw in File.ReadAllLines(path))
-                {
-                    string line = (raw ?? string.Empty).Trim();
-                    if (line.Length == 0 || line.StartsWith("#") || line.StartsWith(";")) continue;
-                    int separator = line.IndexOf('|');
-                    if (separator <= 0 || separator >= line.Length - 1) continue;
-                    string id = line.Substring(0, separator).Trim();
-                    string value = line.Substring(separator + 1).Trim();
-                    uint hash;
-                    if (id.Length > 0 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out hash) && hash != 0U)
-                        RecruitedOutfitHashes[id] = hash;
-                }
-                Log("Loaded persistent outfit hashes: " + RecruitedOutfitHashes.Count + ".");
-            }
-            catch (Exception ex) { Log("Could not load persistent recruit outfits: " + Unwrap(ex)); }
-        }
-
-        private static void SavePersistentRecruitOutfits()
-        {
-            try
-            {
-                string path = ResolveScriptsFile("EnRAGECompanionsExtension.outfits.txt");
-                string directory = Path.GetDirectoryName(path);
-                if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
-                string[] lines = RecruitedOutfitHashes
-                    .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && pair.Value != 0U)
-                    .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-                    .Select(pair => pair.Key + "|" + pair.Value.ToString("X8", CultureInfo.InvariantCulture))
-                    .ToArray();
-                File.WriteAllLines(path, lines);
-            }
-            catch (Exception ex) { Log("Could not save persistent recruit outfits: " + Unwrap(ex)); }
-        }
-
-        private static void PreserveRecruitOutfit(object record, Ped ped)
-        {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
-            string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id)) return;
-
-            uint savedHash;
-            if (RecruitedOutfitHashes.TryGetValue(id, out savedHash) && savedHash != 0U)
-            {
-                ApplySavedRecruitOutfit(record, ped);
-                return;
-            }
-            CaptureRecruitOutfitIfMissing(record, ped);
-        }
-
-        private static void CaptureRecruitOutfitIfMissing(object record, Ped ped)
-        {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
-            string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id)) return;
-            uint existing;
-            if (RecruitedOutfitHashes.TryGetValue(id, out existing) && existing != 0U) return;
-
-            uint outfitHash;
-            if (!TryGetMetaPedOutfitHash(ped, out outfitHash) || outfitHash == 0U)
-            {
-                if (OutfitCaptureFailureLogged.Add(id))
-                    Log("Could not capture the current meta-ped outfit for record " + id + "; native outfit hash was unavailable/zero. Will retry while enRAGE still resolves this recruit.");
-                return;
-            }
-
-            OutfitCaptureFailureLogged.Remove(id);
-            RecruitedOutfitHashes[id] = outfitHash;
-            SavePersistentRecruitOutfits();
-            Log("Saved outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
-                (GetMember(record, "Name") as string ?? id) + " (record=" + id + ").");
-        }
-
-        private static void ApplySavedRecruitOutfit(object record, Ped ped)
-        {
-            if (record == null || ped == null || !ped.Exists() || ped.IsDead) return;
-            string id = GetMember(record, "Id") as string;
-            uint outfitHash;
-            if (string.IsNullOrWhiteSpace(id) || !RecruitedOutfitHashes.TryGetValue(id, out outfitHash) || outfitHash == 0U)
-                return;
-
-            try
-            {
-                if (!TryEquipMetaPedOutfitHash(ped, outfitHash))
-                {
-                    Log("Could not restore saved meta-ped outfit for record " + id + "; compatible outfit native was unavailable.");
-                    return;
-                }
-                Log("Restored outfit 0x" + outfitHash.ToString("X8", CultureInfo.InvariantCulture) + " for " +
-                    (GetMember(record, "Name") as string ?? id) + " (ped=" + ped.Handle + ").");
-            }
-            catch (Exception ex) { Log("Recruit outfit restore warning for " + id + ": " + Unwrap(ex)); }
-        }
-
-        private static bool TryGetMetaPedOutfitHash(Ped ped, out uint outfitHash)
-        {
-            outfitHash = 0U;
-            if (ped == null || !ped.Exists()) return false;
-            MethodInfo getter = FindPedNative(new[] { "_GET_PED_META_OUTFIT_HASH", "GET_PED_META_OUTFIT_HASH" }, 1,
-                p => IsNativeInteger(p[0].ParameterType));
-            if (getter == null)
-            {
-                if (!_loggedOutfitGetterUnavailable)
-                {
-                    _loggedOutfitGetterUnavailable = true;
-                    Log("ScriptHook native wrapper for _GET_PED_META_OUTFIT_HASH was not found; outfit persistence cannot capture new entries on this API build.");
-                }
-                return false;
-            }
-            try
-            {
-                object value = getter.Invoke(null, new[] { ConvertNativeInteger(ped.Handle, getter.GetParameters()[0].ParameterType) });
-                outfitHash = NativeHashToUInt32(value);
-                return outfitHash != 0U;
-            }
-            catch (Exception ex)
-            {
-                Log("_GET_PED_META_OUTFIT_HASH failed: " + Unwrap(ex));
-                return false;
-            }
-        }
-
-        private static bool TryEquipMetaPedOutfitHash(Ped ped, uint outfitHash)
-        {
-            MethodInfo equip = FindPedNative(new[] { "_EQUIP_META_PED_OUTFIT", "EQUIP_META_PED_OUTFIT", "_EQUIP_PED_BODY_COMPONENT" }, 2,
-                p => IsNativeInteger(p[0].ParameterType) && IsNativeInteger(p[1].ParameterType));
-            if (equip == null)
-            {
-                if (!_loggedOutfitEquipUnavailable)
-                {
-                    _loggedOutfitEquipUnavailable = true;
-                    Log("ScriptHook native wrapper for _EQUIP_META_PED_OUTFIT was not found; outfit persistence cannot restore entries on this API build.");
-                }
-                return false;
-            }
-
-            ParameterInfo[] parameters = equip.GetParameters();
-            equip.Invoke(null, new[]
-            {
-                ConvertNativeInteger(ped.Handle, parameters[0].ParameterType),
-                ConvertNativeInteger(outfitHash, parameters[1].ParameterType)
-            });
-
-            MethodInfo update = FindPedNative(new[] { "_UPDATE_PED_VARIATION", "UPDATE_PED_VARIATION" }, 6,
-                p => IsNativeInteger(p[0].ParameterType) && p.Skip(1).All(parameter => parameter.ParameterType == typeof(bool)));
-            if (update != null)
-            {
-                ParameterInfo[] updateParameters = update.GetParameters();
-                update.Invoke(null, new object[]
-                {
-                    ConvertNativeInteger(ped.Handle, updateParameters[0].ParameterType), false, true, true, true, false
-                });
-            }
-            return true;
-        }
-
-        private static MethodInfo FindPedNative(string[] names, int parameterCount, Func<ParameterInfo[], bool> predicate)
-        {
-            Type nativeType = typeof(PED);
-            return nativeType.GetMethods(StaticFlags)
-                .Where(method => names.Contains(method.Name, StringComparer.OrdinalIgnoreCase))
-                .FirstOrDefault(method =>
-                {
-                    ParameterInfo[] parameters = method.GetParameters();
-                    return parameters.Length == parameterCount && predicate(parameters);
-                });
-        }
-
-        private static bool IsNativeInteger(Type type)
-        {
-            return type == typeof(int) || type == typeof(uint) || type == typeof(long) || type == typeof(ulong) ||
-                   type == typeof(short) || type == typeof(ushort) || type.IsEnum;
-        }
-
-        private static object ConvertNativeInteger(long value, Type targetType)
-        {
-            if (targetType.IsEnum) return Enum.ToObject(targetType, value);
-            if (targetType == typeof(int)) return unchecked((int)value);
-            if (targetType == typeof(uint)) return unchecked((uint)value);
-            if (targetType == typeof(long)) return value;
-            if (targetType == typeof(ulong)) return unchecked((ulong)value);
-            if (targetType == typeof(short)) return unchecked((short)value);
-            if (targetType == typeof(ushort)) return unchecked((ushort)value);
-            return Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
-        }
-
-        private static uint NativeHashToUInt32(object value)
-        {
-            if (value == null) return 0U;
-            if (value is uint unsignedValue) return unsignedValue;
-            if (value is int signedValue) return unchecked((uint)signedValue);
-            if (value is long longValue) return unchecked((uint)longValue);
-            if (value is ulong ulongValue) return unchecked((uint)ulongValue);
-            if (value.GetType().IsEnum) return unchecked((uint)Convert.ToInt64(value, CultureInfo.InvariantCulture));
-            try { return Convert.ToUInt32(value, CultureInfo.InvariantCulture); }
-            catch { return 0U; }
         }
 
         private static void LoadPersistentIdSet(string fileName, HashSet<string> destination)
@@ -1196,6 +1583,10 @@ namespace EnRAGECompanionsExtension
                 (inStoryRoster ? "vdl" : _recruitGangId);
 
             ExiledRosterIds.Add(id);
+            HideIndividualOrderPrompts();
+            HideRecruitMedicinePrompt();
+            HideCombatStancePrompt();
+            SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
             SavePersistentIdSet("EnRAGECompanionsExtension.exiled-roster.txt", ExiledRosterIds);
 
             try
@@ -1233,7 +1624,7 @@ namespace EnRAGECompanionsExtension
                 try { InvokeInstance(instance, "SaveRoster"); }
                 catch (Exception ex) { Log("Save after expelling roster member failed: " + Unwrap(ex)); }
                 EnforceExiledRosterMembers(instance);
-                InvokeInstance(instance, "ShowSubtitle", name + " ha sido expulsado de la banda. La decisión no se puede deshacer.");
+                InvokeInstance(instance, "ShowSubtitle", TF("kick.success", name));
                 Log("Permanently expelled roster member " + name + " (record=" + id + ", former gang=" + (formerGang ?? "(none)") + ").");
             }
             catch (Exception ex)
@@ -1313,7 +1704,7 @@ namespace EnRAGECompanionsExtension
             if (player == null || !player.Exists()) return;
 
             string id = GetMember(record, "Id") as string;
-            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? "Compañero";
+            string name = (GetMember(record, "FullName") as string) ?? (GetMember(record, "Name") as string) ?? T("companion.default");
             uint modelHash = 0U;
             if (!string.IsNullOrWhiteSpace(id)) RecruitedRosterModels.TryGetValue(id, out modelHash);
             if (modelHash == 0U) modelHash = ConvertToUInt32(GetMember(record, "ModelHash"));
@@ -1324,7 +1715,7 @@ namespace EnRAGECompanionsExtension
             }
             if (GetMember(record, "IsAlive") is bool isAlive && !isAlive)
             {
-                InvokeInstance(instance, "ShowSubtitle", name + " figura como fallecido en el roster.");
+                InvokeInstance(instance, "ShowSubtitle", TF("roster.dead", name));
                 return;
             }
 
@@ -1336,7 +1727,7 @@ namespace EnRAGECompanionsExtension
                 string existingId = GetMember(existingRecord, "Id") as string;
                 if (string.Equals(existingId, id, StringComparison.OrdinalIgnoreCase) && GetFieldInt(existing, "State", 2) != 2)
                 {
-                    InvokeInstance(instance, "ShowSubtitle", name + " ya te está siguiendo.");
+                    InvokeInstance(instance, "ShowSubtitle", TF("roster.already_following", name));
                     return;
                 }
             }
@@ -1351,7 +1742,6 @@ namespace EnRAGECompanionsExtension
             // original standing elsewhere. The session cache links the persistent record ID to the
             // real ped handle; PedSnapshot/RecordAt are a secondary recovery path for nearby peds.
             Ped existingPed = FindExistingRecruitedPed(instance, record, id, modelHash, player);
-            if (existingPed != null) PreserveRecruitOutfit(record, existingPed);
             ApplyMaximumRecruitFriendship(record);
 
             Type companionType = _mainType.GetNestedType("Companion", BindingFlags.NonPublic);
@@ -1376,6 +1766,7 @@ namespace EnRAGECompanionsExtension
             {
                 if (existingPed != null)
                 {
+                    // Reuse the same pedestrian; do not create a clone or a second roster record.
                     // Adopt the same pedestrian through enRAGE's own path. Setup restores the
                     // active follower relationship and creates a horse for this companion object.
                     try { TASK.CLEAR_PED_TASKS(existingPed.Handle, true, false); } catch { }
@@ -1390,7 +1781,6 @@ namespace EnRAGECompanionsExtension
                     ApplyTargetingPolicy(existingPed);
                     DetachFromLiveCamp(instance, existingPed);
                     CacheRosterRecord(existingPed.Handle, modelHash, record, existingPed);
-                    ApplySavedRecruitOutfit(record, existingPed);
                     ApplyRecruitedPedIdentity(instance, record, existingPed);
                     try { CommitRosterRecord(instance, record, false, existingPed.Handle); }
                     catch (Exception ex) { Log("Roster save after rejoining existing ped warning: " + Unwrap(ex)); }
@@ -1407,7 +1797,6 @@ namespace EnRAGECompanionsExtension
                     if (spawnedPed != null && spawnedPed.Exists())
                     {
                         CacheRosterRecord(spawnedPed.Handle, modelHash, record, spawnedPed);
-                        PreserveRecruitOutfit(record, spawnedPed);
                         ApplyRecruitedPedIdentity(instance, record, spawnedPed);
                         try { CommitRosterRecord(instance, record, false, spawnedPed.Handle); }
                         catch (Exception ex) { Log("Roster save after spawning recruit warning: " + Unwrap(ex)); }
@@ -1417,16 +1806,22 @@ namespace EnRAGECompanionsExtension
 
                 Ped ped = GetField(companion, "Ped") as Ped;
                 if (ped != null && ped.Exists()) ApplyRecruitedPedIdentity(instance, record, ped);
-                Ped horse = GetField(companion, "Horse") as Ped;
-                if (ped != null && ped.Exists() && horse != null && horse.Exists() && !horse.IsDead && !ped.IsOnMount)
-                {
-                    try { TASK.TASK_MOUNT_ANIMAL(ped.Handle, horse.Handle, 20000, -1, 2f, 1, 0UL, 0UL); } catch { }
-                }
+
+                // Do not issue TASK_MOUNT_ANIMAL here. It interrupts enRAGE's WaitToJoin/Ride
+                // follow-up task, leaving a recalled NPC mounted but idle. The normal companion
+                // cycle owns mounting and movement after Adopt/SpawnCompanion.
                 ApplyMaximumRecruitFriendship(record);
+                SetPersistentFollowState(record, CompanionFollowState.Following, null);
+                object activeCompanion = FindActiveExtensionCompanion(instance, id);
+                // An adopted live pedestrian must re-enter WaitToJoin; when SpawnCompanion created
+                // a replacement, preserve enRAGE's own initial state (normally Ride/state 1).
+                if (activeCompanion != null && existingPed != null)
+                {
+                    SetField(activeCompanion, "State", 0);
+                    SetField(activeCompanion, "AskedAt", Game.GameTime);
+                }
                 try { InvokeInstance(instance, "SaveRoster"); } catch { }
-                InvokeInstance(instance, "ShowSubtitle", existingPed != null
-                    ? name + " ha vuelto; viene hacia ti a caballo."
-                    : name + " viene hacia ti a caballo.");
+                InvokeInstance(instance, "ShowSubtitle", existingPed != null ? TF("recruit.success.adopted", name) : TF("recruit.success.approaching", name));
                 InvokeInstance(menu, "Toggle");
             }
             catch
@@ -1479,7 +1874,6 @@ namespace EnRAGECompanionsExtension
                         ConvertToUInt32(GetMember(tracked, "ModelHash")) == modelHash)
                     {
                         CacheRosterRecord(candidate.Handle, modelHash, record, candidate);
-                        PreserveRecruitOutfit(record, candidate);
                         return candidate;
                     }
                 }
@@ -1506,6 +1900,36 @@ namespace EnRAGECompanionsExtension
             return true;
         }
 
+        private static bool NormalizeExtensionRecruitHistory(object record)
+        {
+            if (record == null) return false;
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id) ||
+                !(id.StartsWith("extcomp_", StringComparison.OrdinalIgnoreCase) ||
+                  id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase))) return false;
+
+            int kills = 0;
+            try { kills = Convert.ToInt32(GetMember(record, "TimesKilledPlayer"), CultureInfo.InvariantCulture); } catch { }
+            // Only repair the default/fabricated kill marker when the actual kill counter is zero.
+            // Records with a genuine recorded player kill are left untouched.
+            if (kills != 0) return false;
+
+            bool changed = false;
+            // Extension recruits with no recorded player kills must not inherit enRAGE's
+            // GangMember hunting intent. Keep genuine kill history intact (checked above), but
+            // normalize the extension-owned record's origin as well as disabling its hunt flag.
+            changed |= SetEnumMember(record, "Origin", "Greeted");
+            changed |= SetMember(record, "CanHunt", false);
+            string location = GetMember(record, "KillLocation") as string;
+            if (!string.IsNullOrEmpty(location)) changed |= SetMember(record, "KillLocation", string.Empty);
+            object killedAt = GetMember(record, "KilledPlayerAt");
+            if (killedAt is DateTime timestamp && timestamp != DateTime.MinValue)
+                changed |= SetMember(record, "KilledPlayerAt", DateTime.MinValue);
+            if (GetMember(record, "KilledByPlayer") is bool killedByPlayer && killedByPlayer)
+                changed |= SetMember(record, "KilledByPlayer", false);
+            return changed;
+        }
+
         private static bool ApplyMaximumRecruitFriendship(object record)
         {
             if (record == null) return false;
@@ -1515,7 +1939,6 @@ namespace EnRAGECompanionsExtension
 
             bool changed = SetNumericMember(record, "Hate", 0);
             changed |= SetNumericMember(record, "Fear", 0);
-            changed |= SetNumericMember(record, "Like", 100); // Optional on builds whose record type exposes a like score.
             changed |= SetEnumMember(record, "Disposition", "Friendly");
             return changed;
         }
@@ -1561,6 +1984,7 @@ namespace EnRAGECompanionsExtension
                 // Do not deduplicate by ID: older saves/session caches can hold separate record
                 // objects with the same ID, and every live object must have its hate reset.
                 changed |= ApplyMaximumRecruitFriendship(record);
+                changed |= NormalizeExtensionRecruitHistory(record);
             }
             IList comps = GetField(instance, "_comps") as IList;
             if (comps != null)
@@ -1571,6 +1995,7 @@ namespace EnRAGECompanionsExtension
                     if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) continue;
                     object record = GetField(companion, "Rec");
                     changed |= ApplyMaximumRecruitFriendship(record);
+                    changed |= NormalizeExtensionRecruitHistory(record);
                 }
             }
             if (changed)
@@ -1698,13 +2123,23 @@ namespace EnRAGECompanionsExtension
                 }
 
                 Ped candidate = null;
-                if (_preferredGenericPed != null && _preferredGenericPed.Exists() &&
-                    IsEligibleGenericCandidate(instance, player, _preferredGenericPed, true))
-                    candidate = _preferredGenericPed;
+                bool hasPreferredTarget = _preferredGenericPed != null && _preferredGenericPed.Exists();
+                if (hasPreferredTarget)
+                {
+                    if (IsCachedRecruitedPed(_preferredGenericPed.Handle))
+                    {
+                        if (IsEligibleReleasedRecruitForRecall(instance, player, _preferredGenericPed))
+                            candidate = _preferredGenericPed;
+                    }
+                    else if (IsEligibleGenericCandidate(instance, player, _preferredGenericPed, true))
+                    {
+                        candidate = _preferredGenericPed;
+                    }
+                }
                 _preferredGenericPed = null;
-                if (candidate == null)
+                if (candidate == null && !hasPreferredTarget)
                     candidate = FindCandidate(instance, player);
-                if (candidate == null || !candidate.Exists())
+                if (candidate == null || !candidate.Exists() || candidate.IsDead)
                 {
                     HideGenericRecruitPrompt();
                     return;
@@ -1716,7 +2151,8 @@ namespace EnRAGECompanionsExtension
                 {
                     HideGenericRecruitPrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, 1980406895);
-                    object result = _makePrompt.Invoke(null, new object[] { control, "Cabalga conmigo", true, group });
+                    string promptLabel = IsCachedRecruitedPed(candidate.Handle) ? T("action.call") : T("recruit.prompt.start");
+                    object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
                     _genericPrompt = Convert.ToInt32(result);
                     _genericPromptFor = candidate.Handle;
                     _genericPromptGroup = group;
@@ -1744,6 +2180,12 @@ namespace EnRAGECompanionsExtension
 
                 Ped selected = _genericPromptPed;
                 string key = KeyPrefix + candidate.Handle.ToString("X8");
+                CachedRosterRecord recalledRecord;
+                if (RosterRecordsByPedHandle.TryGetValue(candidate.Handle, out recalledRecord) && recalledRecord != null && recalledRecord.Record != null)
+                {
+                    string recalledId = GetMember(recalledRecord.Record, "Id") as string;
+                    if (!string.IsNullOrWhiteSpace(recalledId)) key = KeyPrefix + "roster_" + recalledId;
+                }
                 _genericPromptArmed = false;
                 HideGenericRecruitPrompt();
                 RecruitGeneric(instance, selected, key, player);
@@ -1753,6 +2195,233 @@ namespace EnRAGECompanionsExtension
                 HideGenericRecruitPrompt();
                 Log("Generic recruitment prompt failed: " + Unwrap(ex));
             }
+        }
+
+        // While aiming at an active extension companion, expose the individual orders as world
+        // prompts. These are deliberately separate from the roster sheet and from Dejar de seguirme.
+        private static bool IsActiveExtensionRecruitTarget(object instance, object record, Ped target)
+        {
+            if (instance == null || record == null || target == null || !target.Exists() ||
+                IsExiledRosterRecord(record) ||
+                !(GetMember(record, "IsAlive") is bool alive) || !alive)
+                return false;
+
+            string id = GetMember(record, "Id") as string;
+            object companion = FindActiveExtensionCompanion(instance, id);
+            if (companion == null) return false;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                GetFieldInt(companion, "State", 2) == 2)
+                return false;
+
+            CompanionPersistentState persistent = GetPersistentState(record, false);
+            if (persistent != null && persistent.FollowState == CompanionFollowState.Dismissed)
+                return false;
+
+            Ped activePed = GetField(companion, "Ped") as Ped;
+            if (activePed == null || !activePed.Exists()) activePed = GetField(companion, "Real") as Ped;
+            return activePed != null && activePed.Exists() && activePed.Handle == target.Handle;
+        }
+
+        private static void UpdateIndividualOrderPrompts(object instance, Ped player)
+        {
+            try
+            {
+                if (!_enableIndividualOrders || player == null || !player.Exists() || player.IsInCombat)
+                {
+                    HideIndividualOrderPrompts();
+                    return;
+                }
+                Ped target = FindAimedRecruitedPed(instance, player);
+                CachedRosterRecord cached;
+                if (target == null || !target.Exists() || !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) ||
+                    cached == null || cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
+                    !IsActiveExtensionRecruitTarget(instance, cached.Record, target))
+                {
+                    HideIndividualOrderPrompts();
+                    return;
+                }
+
+                CompanionPersistentState state = GetPersistentState(cached.Record, true);
+                if (target.IsDead)
+                {
+                    HideIndividualOrderPrompts();
+                    return;
+                }
+                CompanionFollowState current = state == null ? CompanionFollowState.Following : state.FollowState;
+                CompanionFollowState next = current == CompanionFollowState.Following ? CompanionFollowState.Waiting : CompanionFollowState.Following;
+                string label = next == CompanionFollowState.Waiting ? T("order.wait_label") : T("order.follow_label");
+                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
+                UpdateIndividualOrderPrompt(instance, target, group, label, IndividualOrderPromptControl, next, cached.Record);
+            }
+            catch (Exception ex)
+            {
+                HideIndividualOrderPrompts();
+                Log("Individual order prompt failed: " + Unwrap(ex));
+            }
+        }
+        private static void UpdateIndividualOrderPrompt(object instance, Ped target, int group, string label,
+            int control, CompanionFollowState order, object record)
+        {
+            int prompt = _individualOrderPrompt;
+            if (prompt == 0 || _individualOrderPromptFor != target.Handle || _individualOrderPromptGroup != group ||
+                !IsPromptValid(prompt) || !string.Equals(_individualOrderPromptLabel, label, StringComparison.Ordinal))
+            {
+                HideIndividualOrderPrompt();
+                object controlArg = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, control);
+                prompt = Convert.ToInt32(_makePrompt.Invoke(null, new object[] { controlArg, label, true, group }));
+                _individualOrderPromptFor = target.Handle;
+                _individualOrderPromptGroup = group;
+                _individualOrderPromptArmed = false;
+                _individualOrderPromptLabel = label;
+            }
+            _individualOrderPromptPed = target;
+            if (prompt == 0) return;
+            HUD._UI_PROMPT_SET_VISIBLE(prompt, true);
+            HUD._UI_PROMPT_SET_ENABLED(prompt, true);
+            if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt))
+            {
+                _individualOrderPromptArmed = true;
+                return;
+            }
+            if (!_individualOrderPromptArmed) return;
+            Ped selected = _individualOrderPromptPed;
+            _individualOrderPromptArmed = false;
+            if (selected != null && selected.Exists() && selected.Handle == target.Handle)
+                SetIndividualCompanionOrder(instance, record, order);
+        }
+        private static void HideIndividualOrderPrompt()
+        {
+            int prompt = _individualOrderPrompt;
+            if (prompt != 0 && IsPromptValid(prompt))
+                try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
+            _individualOrderPrompt = 0;
+            _individualOrderPromptFor = 0;
+            _individualOrderPromptGroup = 0;
+            _individualOrderPromptArmed = false;
+            _individualOrderPromptPed = null;
+            _individualOrderPromptLabel = null;
+        }
+        private static void HideIndividualOrderPrompts()
+        {
+            HideIndividualOrderPrompt();
+        }
+
+        private static void UpdateCombatStancePrompt(object instance, Ped player)
+        {
+            try
+            {
+                if (!_enableIndividualOrders || player == null || !player.Exists())
+                {
+                    HideCombatStancePrompt();
+                    return;
+                }
+
+                Ped target = FindAimedRecruitedPed(instance, player);
+                CachedRosterRecord cached;
+                if (target == null || !target.Exists() ||
+                    !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
+                    cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
+                    IsExiledRosterRecord(cached.Record) ||
+                    !IsRosterRecordCurrentlyFollowing(instance, cached.Record))
+                {
+                    HideCombatStancePrompt();
+                    return;
+                }
+
+                if (target.IsDead || FindAttackerTarget(instance, target, player) == null)
+                {
+                    HideCombatStancePrompt();
+                    return;
+                }
+
+                CompanionPersistentState state = GetPersistentState(cached.Record, true);
+                if (state == null) { HideCombatStancePrompt(); return; }
+                string label = TF("stance.prefix", CombatStanceLabel(state.CombatStance));
+                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
+                if (_combatStancePrompt == 0 || _combatStancePromptFor != target.Handle ||
+                    _combatStancePromptGroup != group || !IsPromptValid(_combatStancePrompt) ||
+                    !string.Equals(_combatStancePromptLabel, label, StringComparison.Ordinal))
+                {
+                    HideCombatStancePrompt();
+                    object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, CombatStancePromptControl);
+                    _combatStancePrompt = Convert.ToInt32(_makePrompt.Invoke(null,
+                        new object[] { control, label, true, group }));
+                    _combatStancePromptFor = target.Handle;
+                    _combatStancePromptGroup = group;
+                    _combatStancePromptLabel = label;
+                    _combatStancePromptArmed = false;
+                    _combatStancePromptPed = target;
+                }
+                else
+                {
+                    _combatStancePromptPed = target;
+                }
+
+                if (_combatStancePrompt == 0) return;
+                HUD._UI_PROMPT_SET_VISIBLE(_combatStancePrompt, true);
+                HUD._UI_PROMPT_SET_ENABLED(_combatStancePrompt, true);
+                if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(_combatStancePrompt))
+                {
+                    _combatStancePromptArmed = true;
+                    return;
+                }
+                if (!_combatStancePromptArmed) return;
+
+                _combatStancePromptArmed = false;
+                Ped selected = _combatStancePromptPed;
+                HideCombatStancePrompt();
+                if (selected != null && selected.Exists() && selected.Handle == target.Handle)
+                    AdvanceCombatStance(instance, cached.Record, selected);
+            }
+            catch (Exception ex)
+            {
+                HideCombatStancePrompt();
+                Log("Combat stance prompt failed: " + Unwrap(ex));
+            }
+        }
+        private static string CombatStanceLabel(CompanionCombatStance stance)
+        {
+            switch (stance)
+            {
+                case CompanionCombatStance.HoldPosition: return T("stance.hold");
+                case CompanionCombatStance.CoverPlayer: return T("stance.cover");
+                case CompanionCombatStance.DefendArea: return T("stance.defend");
+                case CompanionCombatStance.FireOnSignal: return T("stance.fire");
+                default: return T("stance.follow");
+            }
+        }
+
+        private static void AdvanceCombatStance(object instance, object record, Ped ped)
+        {
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null || ped == null || !ped.Exists()) return;
+            int next = ((int)state.CombatStance + 1) % 5;
+            state.CombatStance = (CompanionCombatStance)next;
+            if (state.CombatStance == CompanionCombatStance.DefendArea)
+            {
+                var pos = ped.Position;
+                state.SavedPosition.HasValue = true;
+                state.SavedPosition.X = pos.X;
+                state.SavedPosition.Y = pos.Y;
+                state.SavedPosition.Z = pos.Z;
+                try { state.SavedPosition.Heading = ped.Heading; } catch { state.SavedPosition.Heading = 0f; }
+            }
+            SavePersistentState(state);
+            InvokeInstance(instance, "ShowSubtitle", TF("stance.changed", GetMember(record, "Name") as string ?? T("companion.default"), CombatStanceLabel(state.CombatStance)));
+        }
+
+        private static void HideCombatStancePrompt()
+        {
+            int prompt = _combatStancePrompt;
+            if (prompt != 0 && IsPromptValid(prompt))
+                try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
+            _combatStancePrompt = 0;
+            _combatStancePromptFor = 0;
+            _combatStancePromptGroup = 0;
+            _combatStancePromptArmed = false;
+            _combatStancePromptPed = null;
+            _combatStancePromptLabel = null;
         }
 
         // Shows a contextual treatment prompt when the player is actively aiming at one of the
@@ -1771,7 +2440,14 @@ namespace EnRAGECompanionsExtension
                 CachedRosterRecord cached;
                 if (!RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
                     cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
-                    IsExiledRosterRecord(cached.Record))
+                    IsExiledRosterRecord(cached.Record) || target.IsDead)
+                {
+                    HideRecruitMedicinePrompt();
+                    return;
+                }
+
+                // During a real encounter H is reserved for the contextual combat-stance prompt.
+                if (FindAttackerTarget(instance, target, player) != null)
                 {
                     HideRecruitMedicinePrompt();
                     return;
@@ -1783,7 +2459,9 @@ namespace EnRAGECompanionsExtension
                 {
                     HideRecruitMedicinePrompt();
                     object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, RecruitMedicinePromptControl);
-                    object result = _makePrompt.Invoke(null, new object[] { control, "Dar remedio ($1)", true, group });
+                    string promptLabel = TF("prompt.medicine",
+                        (_recruitMedicineCostCents / 100.0).ToString("0.00", CultureInfo.InvariantCulture));
+                    object result = _makePrompt.Invoke(null, new object[] { control, promptLabel, true, group });
                     _medicinePrompt = Convert.ToInt32(result);
                     _medicinePromptFor = target.Handle;
                     _medicinePromptGroup = group;
@@ -1926,6 +2604,7 @@ namespace EnRAGECompanionsExtension
                 if (string.IsNullOrEmpty(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
                     return true;
 
+                object recruitedRecord = GetField(companion, "Rec");
                 string why = __args[1] as string;
                 if (string.Equals(why, "back at camp", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1999,7 +2678,7 @@ namespace EnRAGECompanionsExtension
             }
             if (!IsConfiguredRecruitmentFactionAvailable())
             {
-                InvokeInstance(__instance, "ShowSubtitle", "La facción configurada '" + (_recruitGangId ?? "vdl") + "' no existe en enRAGE. Revisa RecruitGangId en el archivo INI.");
+                InvokeInstance(__instance, "ShowSubtitle", TF("recruit.faction_missing", _recruitGangId ?? "vdl"));
                 Log("Recruitment blocked: unknown enRAGE faction ID '" + (_recruitGangId ?? "vdl") + "'.");
                 return;
             }
@@ -2041,12 +2720,25 @@ namespace EnRAGECompanionsExtension
             }
 
             object namingRecord = rosterRecord ?? trackedRecord;
+            if (namingRecord == null)
+            {
+                InvokeInstance(__instance, "ShowSubtitle", "No se pudo obtener el nombre del NPC desde enRAGE; no se reclutó.");
+                Log("Recruitment cancelled: no enRAGE record/name was available for ped " + ped.Handle + ".");
+                return;
+            }
             ApplyMaximumRecruitFriendship(namingRecord);
             string name = GetMember(namingRecord, "Name") as string;
             if (string.IsNullOrWhiteSpace(name))
-                name = FindRecordName(__instance, ped.Handle);
+            {
+                string ignoredTitle;
+                name = FindEnRagePedName(__instance, ped, out ignoredTitle);
+            }
             if (string.IsNullOrWhiteSpace(name))
-                name = "Aliado " + (CountActiveCompanions(__instance) + 1);
+            {
+                InvokeInstance(__instance, "ShowSubtitle", "No se pudo obtener el nombre del NPC desde enRAGE; no se reclutó.");
+                Log("Recruitment cancelled: enRAGE returned no native NPC name for ped " + ped.Handle + ".");
+                return;
+            }
 
             object companion = null;
             bool added = false;
@@ -2077,6 +2769,7 @@ namespace EnRAGECompanionsExtension
                 if (adopt == null)
                     throw new MissingMethodException(_mainType.FullName, "Adopt(Companion, Ped, Ped)");
 
+
                 // If this is a recruit that was dismissed earlier, cancel the ambient wander timer
                 // and clear the old walk-away task BEFORE Adopt/Setup installs the companion AI.
                 // Otherwise the old wander can keep overriding the new follow task.
@@ -2096,13 +2789,15 @@ namespace EnRAGECompanionsExtension
                 try { CommitRosterRecord(__instance, rosterRecord ?? trackedRecord, newlyCreatedRosterRecord, ped.Handle); }
                 catch (Exception ex) { Log("Roster membership update warning: " + Unwrap(ex)); }
                 CacheRosterRecord(ped.Handle, modelHash, rosterRecord ?? trackedRecord, ped);
-                PreserveRecruitOutfit(rosterRecord ?? trackedRecord, ped);
+                // Both first-time recruitment and prompt-based recall must leave the persistent
+                // individual order in Following; a dismissed state must not survive re-adoption.
+                SetPersistentFollowState(rosterRecord ?? trackedRecord, CompanionFollowState.Following, null);
                 ApplyRecruitedPedIdentity(__instance, rosterRecord ?? trackedRecord, ped);
                 SetField(__instance, "_askPed", null);
                 SetField(__instance, "_askKey", null);
                 SetField(__instance, "_askComp", null);
                 InvokeInstance(__instance, "HideAskPrompt");
-                InvokeInstance(__instance, "ShowSubtitle", name + " ahora combate de tu lado.");
+                InvokeInstance(__instance, "ShowSubtitle", TF("companion.recruited", name));
                 Log("Recruited ped=" + ped.Handle + "; model=0x" + modelHash.ToString("X8") + "; role detached if needed.");
             }
             catch
@@ -2126,6 +2821,14 @@ namespace EnRAGECompanionsExtension
             string key = GetField(companion, "Key") as string;
             if (key == null || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
                 return true;
+
+            object record = GetField(companion, "Rec");
+            if (record != null && GetMember(record, "IsAlive") is bool recordAlive && !recordAlive)
+            {
+                // A dead roster member is permanent; never let the companion wrapper respawn a clone.
+                __result = false;
+                return false;
+            }
 
             Ped player = __args[1] as Ped;
             uint modelHash;
@@ -2201,9 +2904,6 @@ namespace EnRAGECompanionsExtension
                 return false;
 
             setup.Invoke(instance, new object[] { companion, spawned, player });
-            // enRAGE's spawn helper creates a fresh randomized meta-ped. Reapply the saved outfit
-            // after Setup so the persistent roster identity uses the same clothing variant.
-            PreserveRecruitOutfit(GetField(companion, "Rec"), spawned);
             return true;
         }
 
@@ -2263,6 +2963,55 @@ namespace EnRAGECompanionsExtension
             int companionHandle = companionPed.Handle;
             int previousTarget;
             bool hadPreviousTarget = CustomCompanionCombatTargets.TryGetValue(companionHandle, out previousTarget);
+            object stanceRecord = GetField(companion, "Rec");
+            string stanceId = GetMember(stanceRecord, "Id") as string;
+            CompanionPersistentState stanceState = GetPersistentState(stanceRecord, false);
+            CompanionCombatStance stance = stanceState == null
+                ? CompanionCombatStance.FollowOrders : stanceState.CombatStance;
+
+            bool playerFiring = false;
+            try { playerFiring = PED.IS_PED_SHOOTING(player.Handle); } catch { }
+            if (playerFiring)
+            {
+                _lastPlayerWeaponFireAt = now;
+                if (!string.IsNullOrWhiteSpace(stanceId))
+                    LastPlayerFireAtById[stanceId] = now;
+            }
+
+            if (stance == CompanionCombatStance.HoldPosition)
+            {
+                CustomCompanionCombatTargets.Remove(companionHandle);
+                CustomCombatSuppressedAt[companionHandle] = now;
+                if (hadPreviousTarget)
+                    try { TASK.CLEAR_PED_TASKS(companionHandle, true, false); } catch { }
+                try { PED.SET_PED_COMBAT_ATTRIBUTES(companionHandle, 5, false); } catch { }
+                try { PED.SET_PED_COMBAT_ATTRIBUTES(companionHandle, 46, false); } catch { }
+                TryInvokeTaskNative("TASK_STAND_STILL", new object[] { companionHandle, 900 });
+                return;
+            }
+
+            if (stance == CompanionCombatStance.DefendArea && stanceState != null &&
+                stanceState.SavedPosition != null && stanceState.SavedPosition.HasValue && threat != null)
+            {
+                float dx = threat.Position.X - stanceState.SavedPosition.X;
+                float dy = threat.Position.Y - stanceState.SavedPosition.Y;
+                float dz = threat.Position.Z - stanceState.SavedPosition.Z;
+                float radius = Math.Max(10.0f, _waitRadius * 2.0f);
+                if ((float)Math.Sqrt(dx * dx + dy * dy + dz * dz) > radius)
+                    threat = null;
+            }
+
+            if (stance == CompanionCombatStance.FireOnSignal)
+            {
+                int lastPlayerFire;
+                bool recentPlayerFire = playerFiring ||
+                    (now >= _lastPlayerWeaponFireAt && now - _lastPlayerWeaponFireAt <= 2500) ||
+                    (!string.IsNullOrWhiteSpace(stanceId) &&
+                     LastPlayerFireAtById.TryGetValue(stanceId, out lastPlayerFire) &&
+                     now >= lastPlayerFire && now - lastPlayerFire <= 2500);
+                if (!recentPlayerFire)
+                    threat = null;
+            }
 
             if (threat == null)
             {
@@ -2285,6 +3034,15 @@ namespace EnRAGECompanionsExtension
             }
 
             int targetHandle = threat.Handle;
+            object affinityRecord = GetField(companion, "Rec");
+            string affinityId = GetMember(affinityRecord, "Id") as string;
+            int lastCombatAt;
+            if (!string.IsNullOrWhiteSpace(affinityId) &&
+                (!LastAffinityCombatAt.TryGetValue(affinityId, out lastCombatAt) || now < lastCombatAt || now - lastCombatAt >= 30000))
+            {
+                LastAffinityCombatAt[affinityId] = now;
+                AwardAffinity(affinityRecord, _affinityCombatGain, "combat");
+            }
             CustomCombatSuppressedAt.Remove(companionHandle);
             bool sameTarget = hadPreviousTarget && previousTarget == targetHandle;
             bool currentlyFightingTarget = false;
@@ -2656,6 +3414,28 @@ namespace EnRAGECompanionsExtension
             return false;
         }
 
+        private static bool IsEligibleReleasedRecruitForRecall(object instance, Ped player, Ped ped)
+        {
+            if (instance == null || player == null || !player.Exists() || ped == null || !ped.Exists() ||
+                ped.IsDead || !ped.IsHuman || ped.Handle == player.Handle || ped.IsHogtied ||
+                ped.IsInVehicle || ped.IsOnMount || ped.Position.DistanceTo(player.Position) > 3.5f ||
+                player.IsInCombat || IsAskBlocked(instance) || CountActiveCompanions(instance) >= _maxCompanions ||
+                AlreadyCompanion(GetField(instance, "_comps") as IList, ped.Handle) ||
+                !IsCachedRecruitedPed(ped.Handle) || IsExtensionCompanionActiveForPed(instance, ped.Handle) ||
+                PED.IS_PED_IN_COMBAT(ped.Handle, 0))
+                return false;
+
+            CachedRosterRecord cached;
+            if (!RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cached) || cached == null || cached.Record == null)
+                return false;
+            string id = GetMember(cached.Record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id) || ExiledRosterIds.Contains(id) || IsExiledRosterRecord(cached.Record))
+                return false;
+            if (GetMember(cached.Record, "IsAlive") is bool alive && !alive)
+                return false;
+            return IsMalePed(ped);
+        }
+
         private static bool IsEligibleGenericCandidate(object instance, Ped player, Ped ped, bool directInteractionTarget = false)
         {
             if (_roleOf == null || player == null || !player.Exists() || ped == null || !ped.Exists() ||
@@ -2762,21 +3542,6 @@ namespace EnRAGECompanionsExtension
             }
         }
 
-        private static string FindRecordName(object instance, int handle)
-        {
-            if (_recordAt == null)
-                return null;
-            try
-            {
-                object record = _recordAt.Invoke(instance, new object[] { handle });
-                if (record == null)
-                    return null;
-                object name = GetMember(record, "Name");
-                return name as string;
-            }
-            catch { return null; }
-        }
-
         private static object GetTrackedRecord(object instance, int handle)
         {
             if (_recordAt == null)
@@ -2816,6 +3581,7 @@ namespace EnRAGECompanionsExtension
                 // The character is a recruited gang member, not one of enRAGE's scripted cast members.
                 SetStoryFlag(existingRecord, false);
                 EnsureRosterProfileData(instance, existingRecord);
+                NormalizeExtensionRecruitHistory(existingRecord);
                 return existingRecord;
             }
 
@@ -2846,8 +3612,13 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(zone))
                 zone = string.Empty;
 
-            string preferredName = FindNamedPedName(instance, ped.Handle);
-            string name = UniqueRosterName(instance, preferredName);
+            string nativeTitle;
+            string name = FindEnRagePedName(instance, ped, out nativeTitle);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                Log("Recruitment cancelled: enRAGE could not resolve a native name for ped " + ped.Handle + ".");
+                return null;
+            }
             string id = null;
             MethodInfo newIdMethod = FindMethod(_mainType, "NewId", 1, p => p[0].ParameterType == typeof(int));
             if (newIdMethod != null)
@@ -2873,12 +3644,20 @@ namespace EnRAGECompanionsExtension
                 return null;
             }
 
-            SetMember(created, "Title", string.Empty);
+            SetMember(created, "Title", nativeTitle ?? string.Empty);
             SetMember(created, "Rank", 1);
             SetMember(created, "RankXp", 0);
             SetMember(created, "PresumedDead", false);
-            SetMember(created, "KillLocation", zone);
-            SetMember(created, "KilledPlayerAt", DateTime.Now);
+            // A new recruit has no player-kill history. NemesisRecord's enum default is Killed,
+            // so leaving Origin untouched fabricates the grudge text "te mató" on the character sheet.
+            SetMember(created, "KillLocation", string.Empty);
+            SetMember(created, "KilledPlayerAt", DateTime.MinValue);
+            SetMember(created, "TimesKilledPlayer", 0);
+            SetMember(created, "KilledByPlayer", false);
+            // GangMember explicitly maps to Intent.Hunts in enRAGE, so it is not a neutral origin.
+            // Greeted plus CanHunt=false prevents both a fabricated kill-history marker and "te da caza".
+            SetEnumMember(created, "Origin", "Greeted");
+            SetMember(created, "CanHunt", false);
             SetMember(created, "FormerGang", null);
             SetMember(created, "Affiliation", null);
             SetMember(created, "BossId", null);
@@ -2886,6 +3665,7 @@ namespace EnRAGECompanionsExtension
             SetMember(created, "CampKnown", false);
             SetStoryFlag(created, false);
             EnsureRosterProfileData(instance, created);
+            NormalizeExtensionRecruitHistory(created);
 
             newlyCreated = true;
             Log("Prepared roster record " + name + " for faction '" + targetGang + "', model=0x" + modelHash.ToString("X8") + ".");
@@ -2904,7 +3684,8 @@ namespace EnRAGECompanionsExtension
             if (roster == null)
                 return null;
 
-            string preferredName = FindNamedPedName(instance, ped.Handle);
+            string ignoredTitle;
+            string preferredName = FindEnRagePedName(instance, ped, out ignoredTitle);
             if (!string.IsNullOrWhiteSpace(preferredName))
             {
                 foreach (object record in roster)
@@ -2968,6 +3749,15 @@ namespace EnRAGECompanionsExtension
                 AmbientReleasedRecruitPeds.Remove(handle);
                 AmbientReleasedWanderAt.Remove(handle);
                 ApplyPendingFullHealthIfNeeded(record, ped);
+                if (ped != null && ped.Exists() && !string.IsNullOrWhiteSpace(id))
+                {
+                    if (!LastObservedHealthById.ContainsKey(id))
+                        LastObservedHealthById[id] = ped.Health;
+                    if (!LastDamageBaselineById.ContainsKey(id))
+                        LastDamageBaselineById[id] = ped.Health;
+                    if (!LastHealthSampleAtById.ContainsKey(id))
+                        LastHealthSampleAtById[id] = Game.GameTime;
+                }
             }
         }
 
@@ -2979,18 +3769,25 @@ namespace EnRAGECompanionsExtension
                 CachedRosterRecord cached = pair.Value;
                 if (cached == null || cached.Record == null || cached.Ped == null)
                     continue;
-                if (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive)
-                    continue;
                 try
                 {
-                    if (!cached.Ped.Exists() || !cached.Ped.IsDead)
+                    Ped ped = cached.Ped;
+                    if (!ped.Exists() || IsExiledRosterRecord(cached.Record)) continue;
+                    string id = GetMember(cached.Record, "Id") as string;
+                    if (!ped.IsDead) continue;
+                    if (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive)
                         continue;
                     SetMember(cached.Record, "IsAlive", false);
                     SetMember(cached.Record, "PresumedDead", false);
                     AppliedPromptNames.Remove(pair.Key);
                     CustomCompanionCombatTargets.Remove(pair.Key);
                     CustomCombatSuppressedAt.Remove(pair.Key);
-                    string zone = InvokeInstance(instance, "GetZoneName", cached.Ped.Position) as string;
+                    if (!string.IsNullOrWhiteSpace(id))
+                    {
+                        LastObservedHealthById.Remove(id);
+                        LastDamageBaselineById.Remove(id);
+                    }
+                    string zone = InvokeInstance(instance, "GetZoneName", ped.Position) as string;
                     if (!string.IsNullOrWhiteSpace(zone))
                         SetMember(cached.Record, "LastDefeatLocation", zone);
                     Log("Marked recruited faction member dead: " +
@@ -3094,47 +3891,50 @@ namespace EnRAGECompanionsExtension
             return changed;
         }
 
-        private static string FindNamedPedName(object instance, int handle)
+        private static string FindEnRagePedName(object instance, Ped ped, out string title)
         {
+            title = string.Empty;
+            if (instance == null || ped == null || !ped.Exists()) return null;
+            object nativeRecord = GetTrackedRecord(instance, ped.Handle);
+            string name = GetMember(nativeRecord, "Name") as string;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                title = GetMember(nativeRecord, "Title") as string ?? string.Empty;
+                return name;
+            }
+            IDictionary named = GetField(instance, "_named") as IDictionary;
+            object namedRecord = named != null && named.Contains(ped.Handle) ? named[ped.Handle] : null;
+            name = GetMember(namedRecord, "Name") as string;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                title = GetMember(namedRecord, "Title") as string ?? string.Empty;
+                return name;
+            }
+            // Use the same appearance-based naming method used by NemesisMod itself. Never create
+            // an extension-only alias when enRAGE has not named the pedestrian yet.
             try
             {
-                IDictionary named = GetField(instance, "_named") as IDictionary;
-                if (named == null || !named.Contains(handle))
-                    return null;
-                return GetMember(named[handle], "Name") as string;
-            }
-            catch { return null; }
-        }
-
-        private static string UniqueRosterName(object instance, string preferredName)
-        {
-            if (!string.IsNullOrWhiteSpace(preferredName) && !RosterNameExists(instance, preferredName))
-                return preferredName;
-
-            for (int i = 1; i <= 9999; i++)
-            {
-                string candidate = "Aliado " + i;
-                if (!RosterNameExists(instance, candidate))
-                    return candidate;
-            }
-            return "Aliado " + Guid.NewGuid().ToString("N").Substring(0, 6);
-        }
-
-        private static bool RosterNameExists(object instance, string name)
-        {
-            foreach (string collectionName in new[] { "Roster", "StoryRoster" })
-            {
-                IEnumerable records = GetMember(instance, collectionName) as IEnumerable;
-                if (records == null)
-                    continue;
-                foreach (object record in records)
+                MethodInfo nameByLook = FindMethod(_mainType, "NameByLook", 1,
+                    p => IsPedType(p[0].ParameterType));
+                if (nameByLook == null)
+                    throw new MissingMethodException(_mainType == null ? "NemesisMod" : _mainType.FullName, "NameByLook(Ped)");
+                object generatedName = nameByLook.Invoke(instance, new object[] { ped });
+                string generated = GetMember(generatedName, "Name") as string;
+                if (string.IsNullOrWhiteSpace(generated)) return null;
+                title = GetMember(generatedName, "Title") as string ?? string.Empty;
+                if (named != null)
                 {
-                    string existingName = GetMember(record, "Name") as string;
-                    if (string.Equals(existingName, name, StringComparison.OrdinalIgnoreCase))
-                        return true;
+                    named[ped.Handle] = generatedName;
+                    SetField(instance, "_namesGiven", GetFieldInt(instance, "_namesGiven", 0) + 1);
                 }
+                Log("Resolved recruited NPC name through enRAGE NameByLook: " + generated + ".");
+                return generated;
             }
-            return false;
+            catch (Exception ex)
+            {
+                Log("Could not resolve enRAGE's native NPC name for ped " + ped.Handle + ": " + Unwrap(ex));
+                return null;
+            }
         }
 
         private static void CommitRosterRecord(object instance, object record, bool newlyCreated, int handle)
@@ -3334,6 +4134,13 @@ namespace EnRAGECompanionsExtension
             Ped horse = GetField(companion, "Horse") as Ped;
             Ped player = Game.Player.Character;
             try { preserveHorse = ped != null && ped.Exists() && ped.IsOnMount && horse != null && horse.Exists(); } catch { }
+            SetPersistentFollowState(GetField(companion, "Rec"), CompanionFollowState.Dismissed, null);
+            string dismissedId = GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty;
+            LastIndividualOrderTaskAt.Remove(dismissedId);
+            LastObservedHealthById.Remove(dismissedId);
+            LastDamageBaselineById.Remove(dismissedId);
+            LastHealthSampleAtById.Remove(dismissedId);
+            LastInjuryRecoveryAtById.Remove(dismissedId);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
@@ -3384,10 +4191,146 @@ namespace EnRAGECompanionsExtension
             SetField(instance, "_askKey", null);
             SetField(instance, "_askComp", null);
             InvokeInstance(instance, "HideAskPrompt");
-            InvokeInstance(instance, "ShowSubtitle", name + " deja de seguirte y vuelve a comportarse como un NPC del mundo.");
+            InvokeInstance(instance, "ShowSubtitle", TF("companion.dismissed", name));
             Log("Dismissed extension companion " + name + "; pedestrian preserved and ambient AI resumed.");
         }
+        private static void MaintainExtensionCompanionDamageability(object companion, Ped player)
+        {
+            if (companion == null) return;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return;
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead) return;
 
+            int state = GetFieldInt(companion, "State", -1), health = 0, maxHealth = 1;
+            try { health = ped.Health; } catch { }
+            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
+            // enRAGE marks adopted companions invincible; extension recruits must remain damageable.
+            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+            if (state == 2 && health > 0 &&
+                health < (int)Math.Ceiling(maxHealth * 0.30))
+            {
+                try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
+                try
+                {
+                    if (player != null && player.Exists())
+                    {
+                        int group = PED.GET_PED_GROUP_INDEX(player.Handle);
+                        if (group > 0 && !PED.IS_PED_GROUP_MEMBER(ped.Handle, group, false))
+                            PED.SET_PED_AS_GROUP_MEMBER(ped.Handle, group);
+                    }
+                }
+                catch { }
+                SetField(companion, "State", 0);
+                SetField(companion, "AskedAt", Game.GameTime);
+                try { ped.BlockPermanentEvents = false; } catch { }
+            }
+        }
+
+        private static bool MaintainCompanionCondition(object instance, object companion, Ped player)
+        {
+            if (companion == null) return false;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return false;
+            object record = GetField(companion, "Rec");
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id) || record == null || IsExiledRosterRecord(record) ||
+                (GetMember(record, "IsAlive") is bool alive && !alive))
+                return false;
+
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead) return false;
+
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null || state.Injury == null) return false;
+            int now = Game.GameTime, health = 0, maxHealth = 1;
+            try { health = ped.Health; } catch { }
+            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
+
+            int baseline;
+            if (!LastDamageBaselineById.TryGetValue(id, out baseline))
+            {
+                baseline = health;
+                LastDamageBaselineById[id] = health;
+            }
+            if (_enableInjurySystem)
+            {
+                if (health > baseline)
+                    LastDamageBaselineById[id] = health;
+                else if (health < baseline)
+                {
+                    int delta = baseline - health;
+                    int threshold = Math.Max(1, (int)Math.Ceiling(maxHealth * _injuryDamageThresholdPercent / 100.0));
+                    if (delta >= threshold)
+                    {
+                        bool wasInjured = state.Injury.IsInjured;
+                        state.Injury.IsInjured = true;
+                        state.Injury.Severity = Math.Max(state.Injury.Severity, Math.Max(1, Math.Min(100,
+                            (int)Math.Ceiling(delta * 100.0 / maxHealth))));
+                        if (state.Injury.FirstInjuredUtcTicks <= 0)
+                            state.Injury.FirstInjuredUtcTicks = DateTime.UtcNow.Ticks;
+                        state.Injury.RecoverySecondsRemaining = Math.Max(
+                            state.Injury.RecoverySecondsRemaining, _injuryRecoverySeconds);
+                        SavePersistentState(state);
+                        LastDamageBaselineById[id] = health;
+                        if (!wasInjured)
+                            InvokeInstance(instance, "ShowSubtitle",
+                                TF("injury.detected", GetMember(record, "Name") as string ?? T("companion.default")));
+                        Log("Tracked companion injury " + id + "; damage=" + delta +
+                            ", severity=" + state.Injury.Severity + ".");
+                    }
+                }
+            }
+            LastObservedHealthById[id] = health;
+            int previousSample;
+            if (!LastHealthSampleAtById.TryGetValue(id, out previousSample) ||
+                now < previousSample || now - previousSample >= 1000)
+            {
+                LastHealthSampleAtById[id] = now;
+                RecoverInjuryOverTime(id, state, now);
+            }
+            return false;
+        }
+
+        private static void RecoverInjuryOverTime(string id, CompanionPersistentState state, int now)
+        {
+            if (!_enableInjurySystem || state == null || state.Injury == null ||
+                !state.Injury.IsInjured)
+            {
+                LastInjuryRecoveryAtById[id] = now;
+                return;
+            }
+            int last;
+            if (!LastInjuryRecoveryAtById.TryGetValue(id, out last) || now < last)
+            {
+                LastInjuryRecoveryAtById[id] = now;
+                return;
+            }
+            int elapsedSeconds = (now - last) / 1000;
+            if (elapsedSeconds <= 0) return;
+            LastInjuryRecoveryAtById[id] = last + elapsedSeconds * 1000;
+            state.Injury.RecoverySecondsRemaining = Math.Max(0, state.Injury.RecoverySecondsRemaining - elapsedSeconds);
+            bool recovered = state.Injury.RecoverySecondsRemaining <= 0;
+            // Avoid writing the JSON every frame; persist the countdown at five-second intervals.
+            int lastPersistAt;
+            bool persistDue = !LastInjuryPersistAtById.TryGetValue(id, out lastPersistAt) ||
+                now < lastPersistAt || now - lastPersistAt >= 5000;
+            if (persistDue || recovered)
+            {
+                if (recovered)
+                {
+                    state.Injury.IsInjured = false;
+                    state.Injury.Severity = 0;
+                    state.Injury.FirstInjuredUtcTicks = 0;
+                }
+                SavePersistentState(state);
+                LastInjuryPersistAtById[id] = now;
+                if (recovered)
+                    Log("Companion injury recovery completed for " + id + ".");
+            }
+        }
         private static void MarkRecruitedCompanionDeath(object instance, object companion)
         {
             try
@@ -3395,24 +4338,20 @@ namespace EnRAGECompanionsExtension
                 string key = GetField(companion, "Key") as string;
                 if (string.IsNullOrEmpty(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
                     return;
-
                 object record = GetField(companion, "Rec");
                 if (record == null || !(GetMember(record, "IsAlive") is bool alive) || !alive)
                     return;
-
                 Ped ped = GetField(companion, "Ped") as Ped;
-                if (ped == null || !ped.Exists())
-                    ped = GetField(companion, "Real") as Ped;
+                if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
                 if (ped == null || !ped.Exists() || !ped.IsDead)
                     return;
-
                 SetMember(record, "IsAlive", false);
                 SetMember(record, "PresumedDead", false);
                 string zone = InvokeInstance(instance, "GetZoneName", ped.Position) as string;
                 if (!string.IsNullOrWhiteSpace(zone))
                     SetMember(record, "LastDefeatLocation", zone);
                 InvokeInstance(instance, "SaveRoster");
-                Log("Marked recruited roster member dead: " + (GetMember(record, "Name") as string ?? key) + ".");
+                Log("Marked recruited companion dead: " + (GetMember(record, "Name") as string ?? key) + ".");
             }
             catch (Exception ex)
             {
@@ -3482,15 +4421,16 @@ namespace EnRAGECompanionsExtension
             try { return assembly.GetType(name, false); }
             catch { return null; }
         }
-
         private static object InvokeInstance(object instance, string name, params object[] args)
         {
-            if (instance == null)
-                return null;
+            if (instance == null) return null;
+            if (string.Equals(name, "ShowSubtitle", StringComparison.OrdinalIgnoreCase) &&
+                args != null && args.Length > 0 && args[0] is string subtitle)
+                args[0] = TranslateExactUiText(subtitle);
+
             MethodInfo method = FindMethod(instance.GetType(), name, args == null ? 0 : args.Length,
                 p => args == null || p.Length == args.Length);
-            if (method == null)
-                return null;
+            if (method == null) return null;
             try { return method.Invoke(instance, args); }
             catch (Exception ex) { Log(name + " invocation failed: " + Unwrap(ex)); return null; }
         }
@@ -3648,6 +4588,135 @@ namespace EnRAGECompanionsExtension
             return correctPath;
         }
 
+
+        private static Dictionary<string, string> CreateDefaultExtensionTexts()
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "order.following", "{0} vuelve a seguirte." },
+                { "order.waiting", "{0} esperará aquí." },
+                { "order.wait_label", "Quédate aquí" },
+                { "order.follow_label", "Sígueme" },
+                { "affinity.status", "{0}: afinidad {1}/100." },
+                { "action.call", "Llamarlo" },
+                { "action.dismiss", "Dejar de seguirme" },
+                { "action.kick", "Echar de la banda" },
+                { "action.kick.confirm", "Confirmar expulsión" },
+                { "action.kick.cancel", "Cancelar expulsión" },
+                { "subtitle.kick.warning", "Aviso: la expulsión es irreversible y podría tener consecuencias para ti en el futuro. Elige {0} para continuar." },
+                { "medicine.exiled", "{0} ya fue expulsado de la banda y no puede recibir remedios." },
+                { "medicine.full_health", "{0} ya tiene la salud al máximo y no hay ninguna herida pendiente." },
+                { "medicine.insufficient_cash", "Necesitas {0} dólares para comprar el remedio." },
+                { "medicine.success", "{0} recibió el remedio. Curación: {1}%. Coste: {2} dólares." },
+                { "kick.success", "{0} ha sido expulsado de la banda. La decisión no se puede deshacer." },
+                { "roster.dead", "{0} figura como fallecido en el roster." },
+                { "roster.already_following", "{0} ya te está siguiendo." },
+                { "recruit.faction_missing", "La facción configurada '{0}' no existe en enRAGE. Revisa RecruitGangId en el archivo INI." },
+                { "recruit.prompt.start", "Cabalga conmigo" },
+                { "recruit.success.adopted", "{0} ha vuelto y vuelve a seguirte." },
+                { "recruit.success.approaching", "{0} fue llamado y se acerca para seguirte." },
+                { "companion.default", "Tu compañero" },
+                { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
+                { "companion.recruited", "{0} ahora combate de tu lado." },
+                { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
+                { "stance.prefix", "Postura: {0}" },
+                { "stance.hold", "Mantener posición" },
+                { "stance.cover", "Cubrir al jugador" },
+                { "stance.defend", "Defender la zona" },
+                { "stance.fire", "Fuego a mi señal" },
+                { "stance.follow", "Seguir órdenes" },
+                { "stance.changed", "{0}: postura {1}." },
+                { "prompt.medicine", "Dar remedio (${0})" }
+            };
+        }
+
+        private static void LoadExtensionTexts()
+        {
+            ExtensionTexts.Clear();
+            foreach (KeyValuePair<string, string> item in DefaultExtensionTexts)
+                ExtensionTexts[item.Key] = item.Value;
+
+            string path = ResolveScriptsFile("EnRAGECompanionsExtension.texts.ini");
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    List<string> initial = new List<string>
+                    {
+                        "; EnRAGE Companions Extension translations.",
+                        "; Edit the value after '='; do not change the keys.",
+                        "; Keep placeholders such as {0}, {1}, and {2} in formatted texts.",
+                        ""
+                    };
+                    initial.AddRange(DefaultExtensionTexts.Select(item => item.Key + "=" + item.Value));
+                    File.WriteAllLines(path, initial);
+                    Log("Created editable extension text file: " + path);
+                    return;
+                }
+
+                HashSet<string> foundKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string raw in File.ReadAllLines(path))
+                {
+                    string line = (raw ?? string.Empty).Trim();
+                    if (line.Length == 0 || line.StartsWith(";") || line.StartsWith("#")) continue;
+                    int split = line.IndexOf('=');
+                    if (split <= 0) continue;
+                    string key = line.Substring(0, split).Trim();
+                    if (!DefaultExtensionTexts.ContainsKey(key)) continue;
+                    string value = line.Substring(split + 1).Trim();
+                    if (value.Length == 0) continue;
+                    ExtensionTexts[key] = value;
+                    foundKeys.Add(key);
+                }
+
+                List<string> missing = DefaultExtensionTexts
+                    .Where(item => !foundKeys.Contains(item.Key))
+                    .Select(item => item.Key + "=" + item.Value)
+                    .ToList();
+                if (missing.Count > 0)
+                {
+                    List<string> additions = new List<string> { "", "; New extension text keys; translate the value after '='." };
+                    additions.AddRange(missing);
+                    File.AppendAllLines(path, additions);
+                }
+                Log("Loaded " + foundKeys.Count + " editable extension text override(s).");
+            }
+            catch (Exception ex)
+            {
+                Log("Translation file could not be loaded; built-in Spanish texts will be used. " + Unwrap(ex));
+            }
+        }
+
+        private static string T(string key)
+        {
+            string value;
+            if (ExtensionTexts.TryGetValue(key, out value) && !string.IsNullOrWhiteSpace(value))
+                return value;
+            if (DefaultExtensionTexts.TryGetValue(key, out value))
+                return value;
+            return key;
+        }
+
+        private static string TranslateExactUiText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            foreach (KeyValuePair<string, string> item in DefaultExtensionTexts)
+                if (string.Equals(item.Value, text, StringComparison.Ordinal))
+                    return T(item.Key);
+            return text;
+        }
+
+        private static string TF(string key, params object[] args)
+        {
+            string format = T(key);
+            try { return string.Format(CultureInfo.InvariantCulture, format, args); }
+            catch (FormatException)
+            {
+                try { return string.Format(CultureInfo.InvariantCulture, DefaultExtensionTexts[key], args); }
+                catch { return format; }
+            }
+        }
+
         private static string ReadConfiguration()
         {
             string path = ResolveScriptsFile("EnRAGECompanionsExtension.ini");
@@ -3656,6 +4725,36 @@ namespace EnRAGECompanionsExtension
                 if (File.Exists(path))
                 {
                     string[] existingLines = File.ReadAllLines(path);
+                    // Remove only the obsolete, known extension-generated appearance settings.
+                    // Their behavior was removed; leave all unrelated user configuration intact.
+                    string[] cleanedLines = existingLines.Where(raw =>
+                    {
+                        string candidate = (raw ?? string.Empty).Trim();
+                        if (candidate.Equals("; Capture/reapply outfit hash, standard clothing slots, hat/accessory props, and current equipped weapon hash when wrappers exist.", StringComparison.OrdinalIgnoreCase) ||
+                            candidate.Equals("; Not full YMT XML/material persistence or a full weapon inventory snapshot.", StringComparison.OrdinalIgnoreCase))
+                            return false;
+                        int separator = candidate.IndexOf('=');
+                        if (separator <= 0) return true;
+                        string key = candidate.Substring(0, separator).Trim();
+                        return !key.Equals("EnableAppearancePersistence", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("RestDurationSeconds", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("IncapacitatedHealthPercent", StringComparison.OrdinalIgnoreCase);
+                    }).ToArray();
+                    if (cleanedLines.Length != existingLines.Length)
+                    {
+                        try
+                        {
+                            File.WriteAllLines(path, cleanedLines);
+                            existingLines = cleanedLines;
+                        }
+                        catch (Exception ex)
+                        {
+                            // The old keys are ignored by the current parser even if this cleanup fails.
+                            Log("Could not remove obsolete INI entries: " + Unwrap(ex));
+                        }
+                    }
                     HashSet<string> existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (string existingLine in existingLines)
                     {
@@ -3668,9 +4767,23 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("RecruitRosterId")) missingSettings.Add("RecruitRosterId=vdl");
                     if (!existingKeys.Contains("AllowFriendlyFire")) missingSettings.Add("AllowFriendlyFire=true");
                     if (!existingKeys.Contains("PreventTargeting")) missingSettings.Add("PreventTargeting=false");
+                    if (!existingKeys.Contains("EnableAffinity")) missingSettings.Add("EnableAffinity=true");
+                    if (!existingKeys.Contains("AffinityTravelIntervalSeconds")) missingSettings.Add("AffinityTravelIntervalSeconds=300");
+                    if (!existingKeys.Contains("AffinityTravelGain")) missingSettings.Add("AffinityTravelGain=1");
+                    if (!existingKeys.Contains("AffinityCombatGain")) missingSettings.Add("AffinityCombatGain=2");
+                    if (!existingKeys.Contains("AffinityTreatmentGain")) missingSettings.Add("AffinityTreatmentGain=3");
+                    if (!existingKeys.Contains("EnableIndividualOrders")) missingSettings.Add("EnableIndividualOrders=true");
+                    if (!existingKeys.Contains("EnableWaitMode")) missingSettings.Add("EnableWaitMode=true");
+                    if (!existingKeys.Contains("WaitRadius")) missingSettings.Add("WaitRadius=8.0");
+                    if (!existingKeys.Contains("EnableInjurySystem")) missingSettings.Add("EnableInjurySystem=true");
+                    if (!existingKeys.Contains("InjuryDamageThresholdPercent")) missingSettings.Add("InjuryDamageThresholdPercent=10");
+                    if (!existingKeys.Contains("InjuryRecoverySeconds")) missingSettings.Add("InjuryRecoverySeconds=180");
+                    if (!existingKeys.Contains("MedicineHealingPercent")) missingSettings.Add("MedicineHealingPercent=100");
+                    if (!existingKeys.Contains("MedicineRecoveryReductionSeconds")) missingSettings.Add("MedicineRecoveryReductionSeconds=60");
+                    if (!existingKeys.Contains("RecruitMedicineCostCents")) missingSettings.Add("RecruitMedicineCostCents=100");
                     if (missingSettings.Count > 0)
                     {
-                        File.AppendAllText(path, Environment.NewLine + "; Added settings for recruitment and targeting" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
+                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity and individual companion orders" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
                     }
                     foreach (string raw in existingLines)
                     {
@@ -3694,6 +4807,35 @@ namespace EnRAGECompanionsExtension
                             _allowFriendlyFire = friendlyFire;
                         else if (key.Equals("PreventTargeting", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool preventTargeting))
                             _preventTargeting = preventTargeting;
+                        else if (key.Equals("EnableAffinity", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableAffinity))
+                            _enableAffinity = enableAffinity;
+                        else if (key.Equals("AffinityTravelIntervalSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int travelInterval))
+                            _affinityTravelIntervalSeconds = Math.Max(30, Math.Min(7200, travelInterval));
+                        else if (key.Equals("AffinityTravelGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int travelGain))
+                            _affinityTravelGain = Math.Max(0, Math.Min(100, travelGain));
+                        else if (key.Equals("AffinityCombatGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int combatGain))
+                            _affinityCombatGain = Math.Max(0, Math.Min(100, combatGain));
+                        else if (key.Equals("AffinityTreatmentGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int treatmentGain))
+                            _affinityTreatmentGain = Math.Max(0, Math.Min(100, treatmentGain));
+                        else if (key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableOrders))
+                            _enableIndividualOrders = enableOrders;
+                        else if (key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableWait))
+                            _enableWaitMode = enableWait;
+                        else if (key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase) &&
+                                 float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float waitRadius))
+                            _waitRadius = Math.Max(1.0f, Math.Min(50.0f, waitRadius));
+                        else if (key.Equals("EnableInjurySystem", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableInjurySystem))
+                            _enableInjurySystem = enableInjurySystem;
+                        else if (key.Equals("InjuryDamageThresholdPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryThreshold))
+                            _injuryDamageThresholdPercent = Math.Max(1, Math.Min(50, injuryThreshold));
+                        else if (key.Equals("InjuryRecoverySeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryRecovery))
+                            _injuryRecoverySeconds = Math.Max(15, Math.Min(86400, injuryRecovery));
+                        else if (key.Equals("MedicineHealingPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineHealing))
+                            _medicineHealingPercent = Math.Max(1, Math.Min(100, medicineHealing));
+                        else if (key.Equals("MedicineRecoveryReductionSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineReduction))
+                            _medicineRecoveryReductionSeconds = Math.Max(0, Math.Min(86400, medicineReduction));
+                        else if (key.Equals("RecruitMedicineCostCents", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineCost))
+                            _recruitMedicineCostCents = Math.Max(0, Math.Min(100000, medicineCost));
                     }
                 }
                 else
@@ -3710,7 +4852,22 @@ namespace EnRAGECompanionsExtension
                         "; True allows player damage/friendly fire; false blocks player targeting.\r\n" +
                         "AllowFriendlyFire=true\r\n" +
                         "; Force the grey/disabled target dot even if friendly fire is enabled.\r\n" +
-                        "PreventTargeting=false\r\n");
+                        "PreventTargeting=false\r\n" +
+                        "EnableAffinity=true\r\n" +
+                        "AffinityTravelIntervalSeconds=300\r\n" +
+                        "AffinityTravelGain=1\r\n" +
+                        "AffinityCombatGain=2\r\n" +
+                        "AffinityTreatmentGain=3\r\n" +
+                        "EnableIndividualOrders=true\r\n" +
+                        "EnableWaitMode=true\r\n" +
+                        "WaitRadius=8.0\r\n" +
+                        "EnableInjurySystem=true\r\n" +
+                        "InjuryDamageThresholdPercent=10\r\n" +
+                        "InjuryRecoverySeconds=180\r\n" +
+                        "MedicineHealingPercent=100\r\n" +
+                        "MedicineRecoveryReductionSeconds=60\r\n" +
+                        "RecruitMedicineCostCents=100\r\n" +
+                        "\r\n");
                 }
             }
             catch (Exception ex)

@@ -130,11 +130,58 @@ La extensión usa la relación de jugador para mantener amistosos a los reclutas
 Estado: cambio de código fuente sin compilación ni prueba in-game en este entorno.
 
 
-## 13. Exclusión del remedio tras expulsión y persistencia del outfit
+## 13. Exclusión del remedio tras expulsión
 
 - Si el ID de roster está en `ExiledRosterIds`, `Dar remedio ($1)` ya no se muestra aunque el NPC expulsado siga físicamente cerca. La ruta que resuelve objetivo, el estado del prompt y el handler de la cura verifican la expulsión; por tanto no se cobra ni se cura a un miembro expulsado.
-- Al reclutar por primera vez, la extensión lee el hash del meta-outfit mediante `_GET_PED_META_OUTFIT_HASH` y lo persiste por ID en `EnRAGECompanionsExtension.outfits.txt`. Al volver a crear el ped, después de la rutina `Setup` de enRAGE, intenta equipar el hash con `_EQUIP_META_PED_OUTFIT` y actualizar la variación con `_UPDATE_PED_VARIATION`. Al reutilizar el mismo NPC vivo, aplica el outfit persistido en vez de aceptar una variación aleatoria nueva.
-- Para registros `extcomp_`/`extvdl_` de versiones anteriores, `RecordAt` intenta capturar el outfit actual la primera vez que enRAGE vuelve a resolver el registro mientras el ped siga presente. Si la entidad anterior ya desapareció y el registro antiguo no tiene hash guardado, la primera variación del reemplazo se convierte en la nueva base persistente. Si el hash no está disponible o vale cero, no se inventa un outfit sustituto: se deja que enRAGE genere su apariencia y el log explica que no pudo guardar el outfit.
-- El outfit auxiliar es un archivo de texto local en la carpeta `scripts`, independiente de `SaveRoster`. Mantenerlo junto con el archivo de la partida si se desea conservar la apariencia de esos reclutas.
 
-Estos cambios son de código fuente y no se compilaron ni ejecutaron en RDR2 dentro de este entorno. Comprobar in-game que el hash de outfit se capture, que la ropa reaparezca igual tras llamar al NPC y que un expulsado ya no muestre el prompt del remedio.
+Esta comprobación está implementada a nivel de código fuente; sigue pendiente su validación dentro de RDR2.
+
+## Fase 2 — persistencia y migración
+
+- Añadidos modelos persistentes independientes del handle del ped.
+- Añadido `EnRAGECompanionsExtension.companions.json`, esquema versionado (versión 3), normalización de enums, afinidad, posición, lesión y preferencia de montura/postura.
+- La escritura se realiza mediante archivo temporal y sustitución con copia de respaldo cuando la plataforma lo permite; si falla la operación principal, se intenta una sustitución alternativa.
+- Si falta el JSON principal o no se puede leer, el almacén intenta restaurar el backup `.bak`; el archivo ilegible se conserva en cuarentena cuando el sistema de archivos lo permite.
+- El esquema anterior se sigue leyendo para conservar afinidad, postura, montura, posición y lesión. Los estados antiguos `Resting` se normalizan a seguimiento; el temporizador de descanso se ignora. Los campos retirados no se vuelven a guardar y los archivos auxiliares de versiones anteriores se ignoran.
+- El almacén se inicializa desde `EntryPoint`; el guardado de migración se realiza solo si hay cambios.
+
+### Fase 3 — órdenes individuales y espera
+
+- Las órdenes individuales aparecen como prompts contextuales solo al apuntar al ped exacto de un recluta activo y no expulsado. `Quédate aquí`/`Sígueme` usa F; las posturas de combate y el remedio conservan sus propios controles contextuales. Mientras espera, el wrapper conserva `State=1`, y los hooks de `WaitToJoin`/`Ride` impiden que la IA de enRAGE sobrescriba el anclaje. Al expulsar al miembro se eliminan los prompts contextuales activos. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
+- `Quédate aquí` guarda coordenadas por ID estable de roster, aplica la tarea de anclaje inmediatamente y evita entrar en el estado `Ride` de enRAGE. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
+- `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
+- Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
+- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` al INI autogenerado y al ejemplo. El código decompilado identifica `RegardOfRecord(NemesisRecord)` como el valor nativo del roster de historia para la relación hacia el jugador; el hook adapta la afinidad persistente 0–100 a esa escala nativa de -100..100 para los reclutas de la extensión, sin dibujar una barra paralela. La presentación final requiere verificación dentro del juego.
+- Los registros de extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE y no es neutral. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
+
+### Fase 4 — heridas y remedios
+
+- El controlador fuerza la vulnerabilidad de los reclutas de la extensión frente al estado invulnerable que asignaba enRAGE al adoptar compañeros; evita además que un recluta de poca salud se quede en el estado `GoingHome` de enRAGE. Las lesiones se registran al superar `InjuryDamageThresholdPercent` de pérdida acumulada desde el baseline de salud. Cada lesión tiene gravedad y tiempo de recuperación por ID estable.
+- La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
+- La extensión no administra incapacitación ni recuperación asistida. Los reclutas permanecen vulnerables al daño normal; cuando el ped muere, `IsAlive` pasa a `false` en el roster y el wrapper de compañero no vuelve a generar un cuerpo sustituto.
+- El remedio usa `RecruitMedicineCostCents`, `MedicineHealingPercent` y `MedicineRecoveryReductionSeconds`. Antes de cobrar valida el objetivo, excluye muertos confirmados y expulsados, y usa un bloqueo temporal por ID para reducir dobles cobros.
+
+### Fase 5 — posturas de combate
+
+- El prompt de postura aparece al apuntar a un compañero activo solo cuando la detección encuentra un ped que está atacando al jugador. `Fuego a mi señal` requiere disparo del jugador en el momento actual o dentro de una ventana de 2,5 segundos.
+
+### Textos y traducciones de la extensión
+
+- En el primer arranque se genera `scripts/EnRAGECompanionsExtension.texts.ini`. Los valores se pueden traducir sin recompilar el código: conserva cada clave a la izquierda de `=` y cambia el texto a la derecha.
+- Los mensajes con formato usan marcadores como `{0}`, `{1}` y `${0}`; no los borres ni los renombres. Las claves nuevas se agregan al archivo existente y el catálogo se recarga al iniciar el script.
+- `EnRAGECompanionsExtension.texts.ini.example` contiene la plantilla inicial con las claves de la extensión.
+
+
+### Pendiente y verificación
+
+No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. No se ha compilado ni verificado dentro del juego.
+
+
+### Endurecimiento adicional — tratamiento, reincorporación y recuperación del JSON
+
+- El tratamiento pagado ahora comprueba que la salud se haya aplicado realmente al ped vivo. Si no se confirma, intenta devolver el coste usando la firma de incremento de efectivo encontrada en el código decompilado de enRAGE; si la devolución falla, deja un error explícito en el log en lugar de anunciar un tratamiento exitoso.
+- La carga del estado persistente intenta recuperar `EnRAGECompanionsExtension.companions.json.bak` cuando falta el archivo principal o no puede deserializarse. La copia primaria ilegible se conserva como archivo de cuarentena antes de restaurar el backup, cuando el sistema de archivos lo permite.
+- Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo, el levantamiento y la recuperación tras un JSON corrupto.
+
+
+- **Limitación pendiente de detección de daño:** el controlador utiliza un baseline acumulado de salud y un umbral configurable, pero no atribuye exhaustivamente cada pérdida al jugador, a un NPC hostil, a una caída o al entorno. Esta distinción requiere una API de atribución de daño fiable y una prueba dentro de la versión objetivo.

@@ -11,3 +11,22 @@ RecruitRosterId=vdl
 AllowFriendlyFire=true
 ; Force the grey/disabled target dot even when friendly fire is enabled.
 PreventTargeting=false
+; Keep the affinity meter in each recruited NPC's detail sheet.
+EnableAffinity=true
+AffinityTravelIntervalSeconds=300
+AffinityTravelGain=1
+AffinityCombatGain=2
+AffinityTreatmentGain=3
+; Individual companion orders and wait behavior.
+EnableIndividualOrders=true
+EnableWaitMode=true
+WaitRadius=8.0
+; Injury detection and recovery countdown for active extension companions.
+EnableInjurySystem=true
+InjuryDamageThresholdPercent=10
+InjuryRecoverySeconds=180
+; Healing percentage and injury-recovery reduction provided by a paid treatment.
+MedicineHealingPercent=100
+MedicineRecoveryReductionSeconds=60
+; Medicine price in cents; 100 = $1.00, 0 = free.
+RecruitMedicineCostCents=100

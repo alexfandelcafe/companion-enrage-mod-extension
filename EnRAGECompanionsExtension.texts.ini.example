@@ -1,0 +1,40 @@
+; EnRAGE Companions Extension — translation template
+; The running extension generates scripts/EnRAGECompanionsExtension.texts.ini on first launch.
+; Copy/merge this file there, or translate the generated file directly.
+; Do not remove format placeholders such as {0}, {1}, {2}, or ${0}.
+; Restart the game/script after changing translations.
+
+order.following={0} vuelve a seguirte.
+order.waiting={0} esperará aquí.
+order.wait_label=Quédate aquí
+order.follow_label=Sígueme
+affinity.status={0}: afinidad {1}/100.
+action.call=Llamarlo
+action.dismiss=Dejar de seguirme
+action.kick=Echar de la banda
+action.kick.confirm=Confirmar expulsión
+action.kick.cancel=Cancelar expulsión
+subtitle.kick.warning=Aviso: la expulsión es irreversible y podría tener consecuencias para ti en el futuro. Elige {0} para continuar.
+medicine.exiled={0} ya fue expulsado de la banda y no puede recibir remedios.
+medicine.full_health={0} ya tiene la salud al máximo y no hay ninguna herida pendiente.
+medicine.insufficient_cash=Necesitas {0} dólares para comprar el remedio.
+medicine.success={0} recibió el remedio. Curación: {1}%. Coste: {2} dólares.
+kick.success={0} ha sido expulsado de la banda. La decisión no se puede deshacer.
+roster.dead={0} figura como fallecido en el roster.
+roster.already_following={0} ya te está siguiendo.
+recruit.faction_missing=La facción configurada '{0}' no existe en enRAGE. Revisa RecruitGangId en el archivo INI.
+recruit.prompt.start=Cabalga conmigo
+recruit.success.adopted={0} ha vuelto y vuelve a seguirte.
+recruit.success.approaching={0} fue llamado y se acerca para seguirte.
+companion.default=Tu compañero
+companion.dismissed={0} deja de seguirte y vuelve a comportarse como un NPC del mundo.
+companion.recruited={0} ahora combate de tu lado.
+injury.detected={0} está herido. Un remedio ayudará a recuperarlo.
+stance.prefix=Postura: {0}
+stance.hold=Mantener posición
+stance.cover=Cubrir al jugador
+stance.defend=Defender la zona
+stance.fire=Fuego a mi señal
+stance.follow=Seguir órdenes
+stance.changed={0}: postura {1}.
+prompt.medicine=Dar remedio (${0})
