@@ -96,8 +96,10 @@ namespace EnRAGECompanionsExtension
         private static int _affinityTravelGain = 1;
         private static int _affinityCombatGain = 2;
         private static int _affinityTreatmentGain = 3;
-        private static bool _enableIndividualOrders = true;
-        private static bool _enableWaitMode = true;
+        // The custom wait/order prompts were disabled after they caused game crashes.
+        // Legacy INI values are ignored; existing saved Waiting states migrate back to Following.
+        private static bool _enableIndividualOrders;
+        private static bool _enableWaitMode;
         private static float _waitRadius = 8.0f;
         private static bool _enableInjurySystem = true;
         private static int _injuryDamageThresholdPercent = 10;
@@ -144,6 +146,12 @@ namespace EnRAGECompanionsExtension
         private static readonly Dictionary<string, AffinityTravelTracker> AffinityTravelTrackers =
             new Dictionary<string, AffinityTravelTracker>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastAffinityCombatAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastNaturalAffinityActionAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastPlayerMeleeActionAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastAffinityObservedHealthById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastStoryRosterSyncAt = -100000;
         private static int _lastRelationshipMaintenanceAt = -100000;
@@ -473,8 +481,8 @@ namespace EnRAGECompanionsExtension
                 object record = GetField(companion, "Rec");
                 CompanionPersistentState state = GetPersistentState(record, false);
                 if (state == null) return true;
-                if (state.FollowState == CompanionFollowState.Waiting ||
-                    (state.Injury != null && state.Injury.IsIncapacitated))
+                NormalizeRemovedWaitState(state);
+                if (state.Injury != null && state.Injury.IsIncapacitated)
                     return false;
             }
             catch (Exception ex) { Log("Companion movement order guard warning: " + Unwrap(ex)); }
@@ -494,6 +502,7 @@ namespace EnRAGECompanionsExtension
                 MaintainRecruitedFriendship(__instance);
                 MaintainRecruitedIdentity(__instance);
                 MaintainAffinityTravel(__instance, player);
+                UpdateNaturalAffinityInteractions(__instance, player);
 
                 Ped stockAskTarget = GetField(__instance, "_askPed") as Ped;
                 if (stockAskTarget != null && stockAskTarget.Exists() && IsPedIncapacitatedRecruit(stockAskTarget))
@@ -502,10 +511,12 @@ namespace EnRAGECompanionsExtension
                     InvokeInstance(__instance, "UpdateAsk", player);
 
                 UpdateGenericRecruitPrompt(__instance, player);
-                UpdateIncapacitatedPrompt(__instance, player);
+                // Removed the unstable "Quédate aquí" order prompt and the E-key manual recovery
+                // prompt. Do not register either custom action; clean up any stale prompt handles.
+                HideIncapacitatedPrompt();
+                HideIndividualOrderPrompts();
                 UpdateCombatStancePrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
-                UpdateIndividualOrderPrompts(__instance, player);
 
                 IList list = GetField(__instance, "_comps") as IList;
                 if (list == null || list.Count == 0) return;
@@ -514,17 +525,13 @@ namespace EnRAGECompanionsExtension
                 foreach (object companion in snapshot)
                 {
                     if (companion == null) continue;
+                    NormalizeRemovedWaitState(GetPersistentState(GetField(companion, "Rec"), false));
                     if (MaintainCompanionCondition(__instance, companion, player))
                     {
                         MaintainExtensionCompanionDamageability(companion, player);
                         continue;
                     }
                     MarkRecruitedCompanionDeath(__instance, companion);
-                    if (MaintainIndividualCompanionOrder(__instance, companion, player))
-                    {
-                        MaintainExtensionCompanionDamageability(companion, player);
-                        continue;
-                    }
                     int state = GetFieldInt(companion, "State", -1);
                     switch (state)
                     {
@@ -780,6 +787,18 @@ namespace EnRAGECompanionsExtension
             }
             return null;
         }
+        private static void NormalizeRemovedWaitState(CompanionPersistentState state)
+        {
+            if (state == null || (state.FollowState != CompanionFollowState.Waiting &&
+                state.FollowState != CompanionFollowState.ReturningToPosition))
+                return;
+
+            state.FollowState = CompanionFollowState.Following;
+            if (state.SavedPosition != null)
+                state.SavedPosition.HasValue = false;
+            SavePersistentState(state);
+        }
+
         private static void SetPersistentFollowState(object record, CompanionFollowState followState, Ped anchorPed)
         {
             CompanionPersistentState state = GetPersistentState(record, true);
@@ -1112,6 +1131,112 @@ namespace EnRAGECompanionsExtension
             if (affinity >= 0)
                 Log("Affinity +" + gain + " (" + reason + ") for " +
                     ((GetMember(record, "Name") as string) ?? (GetMember(record, "Id") as string)) + "; now " + affinity + "/100.");
+        }
+
+        // Observe the game's existing lock-on interaction controls; no extension-owned UI is added.
+        // INPUT_INTERACT_LOCKON_POS = Greet, INPUT_INTERACT_LOCKON_NEG = Antagonize.
+        private static void UpdateNaturalAffinityInteractions(object instance, Ped player)
+        {
+            if (!_enableAffinity || instance == null || player == null || !player.Exists())
+                return;
+
+            try
+            {
+                Ped target = FindAimedRecruitedPed(instance, player);
+                if (target == null || !target.Exists())
+                    return;
+
+                CachedRosterRecord cached;
+                if (!RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) ||
+                    cached == null || cached.Record == null ||
+                    !IsRecruitedRosterRecord(cached.Record) || IsExiledRosterRecord(cached.Record))
+                    return;
+
+                object record = cached.Record;
+                string id = GetMember(record, "Id") as string;
+                if (string.IsNullOrWhiteSpace(id))
+                    return;
+
+                int now = Game.GameTime;
+                bool greeted = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0xF63A17F9));
+                bool antagonized = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0x26A18F47));
+                bool meleePressed = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0xB2F377E8));
+
+                if (greeted)
+                    ApplyNaturalAffinityChange(record, id, "greet", "saludar", 2, 1500);
+                if (antagonized)
+                    ApplyNaturalAffinityChange(record, id, "antagonize", "provocar", -3, 1500);
+                if (meleePressed)
+                    LastPlayerMeleeActionAtById[id] = now;
+
+                int previousHealth;
+                bool hasPreviousHealth = LastAffinityObservedHealthById.TryGetValue(id, out previousHealth);
+                int currentHealth = target.Health;
+                if (hasPreviousHealth && currentHealth < previousHealth)
+                {
+                    int lastMelee;
+                    bool meleeWasRecent = LastPlayerMeleeActionAtById.TryGetValue(id, out lastMelee) &&
+                        now >= lastMelee && now - lastMelee <= 1800;
+                    bool playerShotRecently = now >= _lastPlayerWeaponFireAt &&
+                        now - _lastPlayerWeaponFireAt <= 1800;
+
+                    if (meleeWasRecent)
+                    {
+                        ApplyNaturalAffinityChange(record, id, "physical", "agresión física", -5, 2500);
+                        LastPlayerMeleeActionAtById.Remove(id);
+                    }
+                    else if (playerShotRecently)
+                    {
+                        ApplyNaturalAffinityChange(record, id, "physical", "disparo al compañero", -8, 2500);
+                    }
+                }
+                LastAffinityObservedHealthById[id] = currentHealth;
+
+                int lastMeleeAction;
+                if (LastPlayerMeleeActionAtById.TryGetValue(id, out lastMeleeAction) &&
+                    now >= lastMeleeAction && now - lastMeleeAction <= 1800 &&
+                    target.Position.DistanceTo(player.Position) <= 4.0f)
+                {
+                    bool shoved = false;
+                    try
+                    {
+                        // PED::_HAS_PED_BEEN_SHOVED_RECENTLY(Ped, ms).
+                        shoved = Function.Call<bool>(0x29FCE825613FEFCAUL,
+                            new InputArgument[] { target.Handle, 1400 });
+                    }
+                    catch { }
+
+                    if (shoved)
+                    {
+                        ApplyNaturalAffinityChange(record, id, "physical", "empujón", -5, 2500);
+                        LastPlayerMeleeActionAtById.Remove(id);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Natural affinity interaction check warning: " + Unwrap(ex));
+            }
+        }
+
+        private static void ApplyNaturalAffinityChange(object record, string id, string actionKey,
+            string reason, int delta, int cooldownMs)
+        {
+            if (!_enableAffinity || record == null || string.IsNullOrWhiteSpace(id) || delta == 0)
+                return;
+
+            string key = id + "|" + actionKey;
+            int now = Game.GameTime;
+            int previous;
+            if (LastNaturalAffinityActionAt.TryGetValue(key, out previous) &&
+                now >= previous && now - previous < cooldownMs)
+                return;
+
+            LastNaturalAffinityActionAt[key] = now;
+            int affinity = ChangeAffinity(record, delta);
+            if (affinity >= 0)
+                Log("Affinity " + (delta > 0 ? "+" : "") + delta + " (" + reason + ") for " +
+                    ((GetMember(record, "Name") as string) ?? id) + "; now " + affinity + "/100.");
         }
 
         private static void MaintainAffinityTravel(object instance, Ped player)
@@ -5586,7 +5711,10 @@ namespace EnRAGECompanionsExtension
                         return !key.Equals("EnableAppearancePersistence", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("RestDurationSeconds", StringComparison.OrdinalIgnoreCase) &&
-                               !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase);
+                               !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase);
                     }).ToArray();
                     if (cleanedLines.Length != existingLines.Length)
                     {
@@ -5618,9 +5746,6 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("AffinityTravelGain")) missingSettings.Add("AffinityTravelGain=1");
                     if (!existingKeys.Contains("AffinityCombatGain")) missingSettings.Add("AffinityCombatGain=2");
                     if (!existingKeys.Contains("AffinityTreatmentGain")) missingSettings.Add("AffinityTreatmentGain=3");
-                    if (!existingKeys.Contains("EnableIndividualOrders")) missingSettings.Add("EnableIndividualOrders=true");
-                    if (!existingKeys.Contains("EnableWaitMode")) missingSettings.Add("EnableWaitMode=true");
-                    if (!existingKeys.Contains("WaitRadius")) missingSettings.Add("WaitRadius=8.0");
                     if (!existingKeys.Contains("EnableInjurySystem")) missingSettings.Add("EnableInjurySystem=true");
                     if (!existingKeys.Contains("InjuryDamageThresholdPercent")) missingSettings.Add("InjuryDamageThresholdPercent=10");
                     if (!existingKeys.Contains("InjuryRecoverySeconds")) missingSettings.Add("InjuryRecoverySeconds=180");
@@ -5664,13 +5789,6 @@ namespace EnRAGECompanionsExtension
                             _affinityCombatGain = Math.Max(0, Math.Min(100, combatGain));
                         else if (key.Equals("AffinityTreatmentGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int treatmentGain))
                             _affinityTreatmentGain = Math.Max(0, Math.Min(100, treatmentGain));
-                        else if (key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableOrders))
-                            _enableIndividualOrders = enableOrders;
-                        else if (key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableWait))
-                            _enableWaitMode = enableWait;
-                        else if (key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase) &&
-                                 float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float waitRadius))
-                            _waitRadius = Math.Max(1.0f, Math.Min(50.0f, waitRadius));
                         else if (key.Equals("EnableInjurySystem", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableInjurySystem))
                             _enableInjurySystem = enableInjurySystem;
                         else if (key.Equals("InjuryDamageThresholdPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryThreshold))
@@ -5707,9 +5825,6 @@ namespace EnRAGECompanionsExtension
                         "AffinityTravelGain=1\r\n" +
                         "AffinityCombatGain=2\r\n" +
                         "AffinityTreatmentGain=3\r\n" +
-                        "EnableIndividualOrders=true\r\n" +
-                        "EnableWaitMode=true\r\n" +
-                        "WaitRadius=8.0\r\n" +
                         "EnableInjurySystem=true\r\n" +
                         "InjuryDamageThresholdPercent=10\r\n" +
                         "InjuryRecoverySeconds=180\r\n" +
