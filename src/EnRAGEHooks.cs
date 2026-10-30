@@ -77,11 +77,6 @@ namespace EnRAGECompanionsExtension
         private static Ped _combatStancePromptPed;
         private static string _combatStancePromptLabel;
         private static int _individualOrderPrompt;
-        private static int _individualOrderPromptFor;
-        private static int _individualOrderPromptGroup;
-        private static bool _individualOrderPromptArmed;
-        private static Ped _individualOrderPromptPed;
-        private static string _individualOrderPromptLabel;
         private static int _maxCompanions = 3;
         // Default affiliation is Van der Linde for compatibility. Both settings can target an
         // existing faction in enRAGE; the player-friendly relationship group is independent of it.
@@ -1016,9 +1011,9 @@ namespace EnRAGECompanionsExtension
             try
             {
                 int now = Game.GameTime;
-                bool greeted = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0xF63A17F9));
-                bool antagonized = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0x26A18F47));
-                bool meleePressed = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0xB2F377E8));
+                bool greeted = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((uint)0xF63A17F9));
+                bool antagonized = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((uint)0x26A18F47));
+                bool meleePressed = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((uint)0xB2F377E8));
 
                 Ped aimedTarget = FindAimedRecruitedPed(instance, player);
                 Ped target = aimedTarget;
@@ -2413,11 +2408,6 @@ namespace EnRAGECompanionsExtension
             if (prompt != 0 && IsPromptValid(prompt))
                 try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
             _individualOrderPrompt = 0;
-            _individualOrderPromptFor = 0;
-            _individualOrderPromptGroup = 0;
-            _individualOrderPromptArmed = false;
-            _individualOrderPromptPed = null;
-            _individualOrderPromptLabel = null;
         }
         private static void HideIndividualOrderPrompts()
         {
