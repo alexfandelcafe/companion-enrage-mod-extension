@@ -489,17 +489,30 @@ namespace EnRAGECompanionsExtension
                     string id = GetMember(record, "Id") as string;
                     bool belowEnRageHurtThreshold = health > 0 &&
                         health < (int)Math.Ceiling(maxHealth * 0.30);
-                    if (belowEnRageHurtThreshold && !IsNativeWoundedDown(__instance, ped))
+                    if (belowEnRageHurtThreshold)
                     {
-                        if (!string.IsNullOrWhiteSpace(id) && LowHealthRideSuppressedIds.Add(id))
+                        bool nativeDown = IsNativeWoundedDown(__instance, ped);
+                        if (nativeDown)
+                        {
+                            if (!string.IsNullOrWhiteSpace(id))
+                                LowHealthRideSuppressedIds.Remove(id);
+                            TryEnterIncapacitated(__instance, record, ped);
+                        }
+                        else if (!string.IsNullOrWhiteSpace(id) && LowHealthRideSuppressedIds.Add(id))
+                        {
                             Log("Suppressed enRAGE low-health flee for recruit " + id +
                                 " until native incapacitation can take over.");
+                        }
+
                         // NemesisMod.Ride sends every companion below 30% health home before
-                        // RDR2 can enter the incapacitated state. Suppress that branch so the
-                        // native incapacitated state can be detected and recovered instead.
-                        Ped player = __args.Length > 1 ? __args[1] as Ped : null;
-                        if (player != null && player.Exists())
-                            InvokeInstance(__instance, "CompanionFight", companion, player);
+                        // RDR2 can enter the incapacitated state. Suppress that branch for both
+                        // the pending-wound and confirmed-WoundedDown cases.
+                        if (!nativeDown)
+                        {
+                            Ped player = __args.Length > 1 ? __args[1] as Ped : null;
+                            if (player != null && player.Exists())
+                                InvokeInstance(__instance, "CompanionFight", companion, player);
+                        }
                         return false;
                     }
                     if (!string.IsNullOrWhiteSpace(id))
