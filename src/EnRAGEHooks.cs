@@ -4110,15 +4110,6 @@ namespace EnRAGECompanionsExtension
                 LastHealthSampleAtById.Remove(id);
                 LastInjuryRecoveryAtById.Remove(id);
                 LastInjuryPersistAtById.Remove(id);
-                foreach (string helperId in AutoAssistTargetByHelperId
-                    .Where(pair => string.Equals(pair.Value, id, StringComparison.OrdinalIgnoreCase))
-                    .Select(pair => pair.Key).ToArray())
-                {
-                    AutoAssistTargetByHelperId.Remove(helperId);
-                    LastAutoAssistMoveAtByHelperId.Remove(helperId);
-                }
-                AutoAssistTargetByHelperId.Remove(id);
-                LastAutoAssistMoveAtByHelperId.Remove(id);
             }
         }
 
@@ -4201,8 +4192,6 @@ namespace EnRAGECompanionsExtension
             try { preserveHorse = ped != null && ped.Exists() && ped.IsOnMount && horse != null && horse.Exists(); } catch { }
             SetPersistentFollowState(GetField(companion, "Rec"), CompanionFollowState.Dismissed, null);
             string dismissedId = GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty;
-            AutoAssistTargetByHelperId.Remove(dismissedId);
-            LastAutoAssistMoveAtByHelperId.Remove(dismissedId);
             LastObservedHealthById.Remove(dismissedId);
             LastDamageBaselineById.Remove(dismissedId);
             LastDamageAtById.Remove(dismissedId);
