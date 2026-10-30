@@ -4667,14 +4667,6 @@ namespace EnRAGECompanionsExtension
                 { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
                 { "companion.escaped", "{0} huyó y dejó de formar parte de tu banda." },
                 { "companion.recruited", "{0} ahora combate de tu lado." },
-                { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
-                { "stance.prefix", "Postura: {0}" },
-                { "stance.hold", "Mantener posición" },
-                { "stance.cover", "Cubrir al jugador" },
-                { "stance.defend", "Defender la zona" },
-                { "stance.fire", "Fuego a mi señal" },
-                { "stance.follow", "Seguir órdenes" },
-                { "stance.changed", "{0}: postura {1}." },
                 { "prompt.medicine", "Dar remedio (${0})" }
             };
         }
