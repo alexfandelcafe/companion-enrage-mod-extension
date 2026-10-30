@@ -205,6 +205,8 @@ namespace EnRAGECompanionsExtension
                 _recordAt = FindMethod(_mainType, "RecordAt", 1, p => p[0].ParameterType == typeof(int));
                 _regardOfRecord = FindMethod(_mainType, "RegardOfRecord", 1,
                     p => p[0].ParameterType.Name == "NemesisRecord");
+                MethodInfo regardEarned = FindMethod(_mainType, "RegardEarned", 1,
+                    p => p[0].ParameterType == typeof(string));
                 _roleOf = FindMethod(_mainType, "RoleOf", 1, p => p[0].ParameterType == typeof(int));
                 _whoIs = FindMethod(_mainType, "WhoIs", 1, p => p[0].ParameterType == typeof(int));
                 _makePrompt = FindMethod(_mainType, "MakePrompt", 4, p =>
@@ -270,9 +272,11 @@ namespace EnRAGECompanionsExtension
                 if (_rosterMenuType != null)
                 {
                     MethodInfo detailActions = FindMethod(_rosterMenuType, "DetailActions", 0);
+                    MethodInfo drawDetail = FindMethod(_rosterMenuType, "DrawDetail", 0);
                     MethodInfo activateDetail = FindMethod(_rosterMenuType, "ActivateDetail", 0);
                     MethodInfo handleDetailKey = FindMethod(_rosterMenuType, "HandleDetailKey", 1);
                     if (detailActions != null) _harmony.Patch(detailActions, postfix: Hook(nameof(DetailActionsPostfix)));
+                    if (drawDetail != null) _harmony.Patch(drawDetail, transpiler: Hook(nameof(DrawDetailAffinityTranspiler)));
                     if (activateDetail != null) _harmony.Patch(activateDetail, prefix: Hook(nameof(ActivateDetailPrefix)));
                     if (handleDetailKey != null) _harmony.Patch(handleDetailKey, prefix: Hook(nameof(HandleDetailKeyPrefix)));
                 }
@@ -296,6 +300,8 @@ namespace EnRAGECompanionsExtension
                     _harmony.Patch(_recordAt, postfix: Hook(nameof(RecordAtPostfix)));
                 if (_regardOfRecord != null)
                     _harmony.Patch(_regardOfRecord, postfix: Hook(nameof(RegardOfRecordPostfix)));
+                if (regardEarned != null)
+                    _harmony.Patch(regardEarned, postfix: Hook(nameof(RegardEarnedPostfix)));
 
                 if (cleanup != null)
                     _harmony.Patch(cleanup, postfix: Hook(nameof(CleanupPostfix)));
@@ -907,11 +913,26 @@ namespace EnRAGECompanionsExtension
             float dz = ped.Position.Z - state.SavedPosition.Z;
             if ((float)Math.Sqrt(dx * dx + dy * dy + dz * dz) > _waitRadius)
             {
-                if (!TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD", new object[] { ped.Handle, state.SavedPosition.X, state.SavedPosition.Y, state.SavedPosition.Z, 1.0f, 10000, state.SavedPosition.Heading, 1.0f }))
-                    Log("TASK_GO_STRAIGHT_TO_COORD wrapper unavailable; held companion " + id + " could not return.");
+                // Use the exact wrapper signature already used by enRAGE itself. The previous
+                // reflective call supplied eight arguments, while this build's wrapper takes nine;
+                // as a result a held companion could not reliably return to the anchor.
+                try
+                {
+                    TASK.TASK_GO_STRAIGHT_TO_COORD(ped.Handle, state.SavedPosition.X, state.SavedPosition.Y,
+                        state.SavedPosition.Z, 1.0f, -1, 40000f, 0.5f, 0);
+                }
+                catch (Exception ex)
+                {
+                    Log("Held companion return task failed for " + id + ": " + Unwrap(ex));
+                }
             }
-            else if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
-                TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
+            else
+            {
+                // Invoke the known two-argument wrapper directly instead of discovering native
+                // overloads by name/count through reflection during the input callback.
+                try { TASK.TASK_STAND_STILL(ped.Handle, -1); }
+                catch (Exception ex) { Log("Held companion stand-still task failed for " + id + ": " + Unwrap(ex)); }
+            }
         }
         private static bool TryInvokeNativeWrapper(Type nativeType, string methodName, object[] args)
         {
@@ -1001,6 +1022,87 @@ namespace EnRAGECompanionsExtension
                 __result = Math.Max(-100, Math.Min(100, state.Affinity * 2 - 100));
             }
             catch (Exception ex) { Log("Native story regard meter sync warning: " + Unwrap(ex)); }
+        }
+
+        // The original RosterMenu only renders its built-in "HACIA TI" meter inside the
+        // NemesisRecord.Story branch. Recruits deliberately stay Story=false to avoid changing
+        // enRAGE's story lifecycle, even when the VDL view contains them. Widen only the display
+        // condition for those VDL recruit sheets so the existing native meter and drawing code run.
+        private static IEnumerable<CodeInstruction> DrawDetailAffinityTranspiler(IEnumerable<CodeInstruction> instructions)
+        {
+            List<CodeInstruction> codes = instructions.ToList();
+            try
+            {
+                Type recordType = _mainType == null ? null : _mainType.Assembly.GetType("NemesisSystem.NemesisRecord", false);
+                PropertyInfo storyProperty = recordType == null ? null : recordType.GetProperty("Story", InstanceFlags);
+                MethodInfo storyGetter = storyProperty == null ? null : storyProperty.GetGetMethod(true);
+                MethodInfo replacement = typeof(EnRAGEHooks).GetMethod(
+                    nameof(ShouldDrawNativeStoryAffinitySection), BindingFlags.Static | BindingFlags.NonPublic);
+                bool patched = false;
+
+                if (storyGetter != null && replacement != null)
+                {
+                    for (int i = 0; i < codes.Count; i++)
+                    {
+                        if ((codes[i].opcode == OpCodes.Callvirt || codes[i].opcode == OpCodes.Call) &&
+                            codes[i].operand is MethodInfo called && called == storyGetter)
+                        {
+                            CodeInstruction instruction = new CodeInstruction(OpCodes.Call, replacement);
+                            instruction.labels.AddRange(codes[i].labels);
+                            instruction.blocks.AddRange(codes[i].blocks);
+                            codes[i] = instruction;
+                            patched = true;
+                            break;
+                        }
+                    }
+                }
+
+                Log(patched
+                    ? "RosterMenu.DrawDetail now uses enRAGE's native regard meter for VDL recruits."
+                    : "WARNING: could not locate the Story getter in RosterMenu.DrawDetail; native regard meter display was not patched.");
+            }
+            catch (Exception ex)
+            {
+                Log("Native regard meter transpiler failed: " + Unwrap(ex));
+            }
+            return codes;
+        }
+
+        private static bool ShouldDrawNativeStoryAffinitySection(object record)
+        {
+            try
+            {
+                if (record == null) return false;
+                if (GetMember(record, "Story") is bool story && story) return true;
+                if (!IsRecruitedRosterRecord(record) || !UsesVanDerLindeStoryRoster()) return false;
+                return string.Equals(GetMember(record, "Gang") as string, "vdl", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                Log("Native regard section eligibility check failed: " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        // In the native detail view the explanatory line calls RegardEarned with Id.Substring(4).
+        // For extension IDs, map that synthetic key to the persistent affinity so the line stays
+        // consistent with the native meter instead of displaying the unrelated 0 + 0 story values.
+        private static void RegardEarnedPostfix(string __0, ref int __result)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(__0) ||
+                    !( __0.StartsWith("comp_", StringComparison.OrdinalIgnoreCase) ||
+                       __0.StartsWith("vdl_", StringComparison.OrdinalIgnoreCase)))
+                    return;
+
+                CompanionStateStore store = CompanionStateRuntime.Store;
+                CompanionPersistentState state;
+                string recordId = "ext" + __0;
+                if (store != null && store.TryGet(recordId, out state) && state != null)
+                    __result = Math.Max(-100, Math.Min(100, state.Affinity * 2 - 100));
+            }
+            catch (Exception ex) { Log("Native regard breakdown sync warning: " + Unwrap(ex)); }
         }
 
         private static void AwardAffinity(object record, int gain, string reason)
