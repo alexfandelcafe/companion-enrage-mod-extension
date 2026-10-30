@@ -623,6 +623,7 @@ namespace EnRAGECompanionsExtension
                 string id = GetMember(record, "Id") as string;
                 uint modelHash = ConvertToUInt32(GetMember(record, "ModelHash"));
                 if (record == null || modelHash == 0U || string.IsNullOrWhiteSpace(id) ||
+                    string.IsNullOrWhiteSpace(GetMember(record, "Gang") as string) ||
                     !(id.StartsWith("extcomp_", StringComparison.OrdinalIgnoreCase) ||
                       id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase)))
                     return;
@@ -1553,9 +1554,12 @@ namespace EnRAGECompanionsExtension
         {
             if (record == null) return false;
             string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id)) return false;
+            if (string.IsNullOrWhiteSpace(id) ||
+                string.IsNullOrWhiteSpace(GetMember(record, "Gang") as string))
+                return false;
             if (RecruitedRosterModels.ContainsKey(id)) return true;
             // Records created by this extension have a stable prefix and retain ModelHash in enRAGE's save.
+            // A former recruit whose Gang was cleared after escape is no longer an active recruit.
             return (id.StartsWith("extcomp_", StringComparison.OrdinalIgnoreCase) ||
                     id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase)) &&
                    ConvertToUInt32(GetMember(record, "ModelHash")) != 0U;
