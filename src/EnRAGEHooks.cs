@@ -5746,7 +5746,7 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("RecruitMedicineCostCents")) missingSettings.Add("RecruitMedicineCostCents=100");
                     if (missingSettings.Count > 0)
                     {
-                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity and individual companion orders" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
+                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity, injury, and medicine" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
                     }
                     foreach (string raw in existingLines)
                     {
