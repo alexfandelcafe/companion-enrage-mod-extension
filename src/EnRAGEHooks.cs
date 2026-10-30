@@ -93,7 +93,6 @@ namespace EnRAGECompanionsExtension
         private static bool _enableInjurySystem = true;
         private static int _injuryDamageThresholdPercent = 10;
         private static int _injuryRecoverySeconds = 180;
-        private static int _incapacitatedHealthPercent = 35;
         private static int _medicineHealingPercent = 100;
         private static int _medicineRecoveryReductionSeconds = 60;
         private static int _recruitMedicineCostCents = 100;
@@ -4144,8 +4143,7 @@ namespace EnRAGECompanionsExtension
                         Game.GameTime < recoveryUntil)
                         continue;
 
-                    // Only enRAGE's native WoundedDown state (or the extension's recent-hit
-                    // threshold for living peds) is recoverable. A generic dead ped stays dead.
+                    // Only enRAGE's native WoundedDown state is recoverable. A generic dead ped stays dead.
                     if (IsLikelyIncapacitated(instance, cached.Record, ped, id))
                     {
                         SetMember(cached.Record, "IsAlive", true);
@@ -5426,7 +5424,6 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("EnableInjurySystem")) missingSettings.Add("EnableInjurySystem=true");
                     if (!existingKeys.Contains("InjuryDamageThresholdPercent")) missingSettings.Add("InjuryDamageThresholdPercent=10");
                     if (!existingKeys.Contains("InjuryRecoverySeconds")) missingSettings.Add("InjuryRecoverySeconds=180");
-                    if (!existingKeys.Contains("IncapacitatedHealthPercent")) missingSettings.Add("IncapacitatedHealthPercent=35");
                     if (!existingKeys.Contains("MedicineHealingPercent")) missingSettings.Add("MedicineHealingPercent=100");
                     if (!existingKeys.Contains("MedicineRecoveryReductionSeconds")) missingSettings.Add("MedicineRecoveryReductionSeconds=60");
                     if (!existingKeys.Contains("RecruitMedicineCostCents")) missingSettings.Add("RecruitMedicineCostCents=100");
@@ -5472,8 +5469,6 @@ namespace EnRAGECompanionsExtension
                             _injuryDamageThresholdPercent = Math.Max(1, Math.Min(50, injuryThreshold));
                         else if (key.Equals("InjuryRecoverySeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryRecovery))
                             _injuryRecoverySeconds = Math.Max(15, Math.Min(86400, injuryRecovery));
-                        else if (key.Equals("IncapacitatedHealthPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int incapacitatedHealth))
-                            _incapacitatedHealthPercent = Math.Max(10, Math.Min(75, incapacitatedHealth));
                         else if (key.Equals("MedicineHealingPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineHealing))
                             _medicineHealingPercent = Math.Max(1, Math.Min(100, medicineHealing));
                         else if (key.Equals("MedicineRecoveryReductionSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineReduction))
@@ -5505,7 +5500,6 @@ namespace EnRAGECompanionsExtension
                         "EnableInjurySystem=true\r\n" +
                         "InjuryDamageThresholdPercent=10\r\n" +
                         "InjuryRecoverySeconds=180\r\n" +
-                        "IncapacitatedHealthPercent=35\r\n" +
                         "MedicineHealingPercent=100\r\n" +
                         "MedicineRecoveryReductionSeconds=60\r\n" +
                         "RecruitMedicineCostCents=100\r\n" +
