@@ -1004,6 +1004,9 @@ namespace EnRAGECompanionsExtension
 
         // Observe the game's existing lock-on interaction controls; no extension-owned UI is added.
         // INPUT_INTERACT_LOCKON_POS = Greet, INPUT_INTERACT_LOCKON_NEG = Antagonize.
+        // Observe RDR2's existing lock-on controls; this does not create its own interaction UI.
+        // If melee is pressed without a retained lock-on target, associate it only with a very
+        // nearby cached recruit and wait for the native shove signal before changing affinity.
         private static void UpdateNaturalAffinityInteractions(object instance, Ped player)
         {
             if (!_enableAffinity || instance == null || player == null || !player.Exists())
@@ -1011,80 +1014,143 @@ namespace EnRAGECompanionsExtension
 
             try
             {
-                Ped target = FindAimedRecruitedPed(instance, player);
-                if (target == null || !target.Exists())
-                    return;
-
-                CachedRosterRecord cached;
-                if (!RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) ||
-                    cached == null || cached.Record == null ||
-                    !IsRecruitedRosterRecord(cached.Record) || IsExiledRosterRecord(cached.Record))
-                    return;
-
-                object record = cached.Record;
-                string id = GetMember(record, "Id") as string;
-                if (string.IsNullOrWhiteSpace(id))
-                    return;
-
                 int now = Game.GameTime;
                 bool greeted = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0xF63A17F9));
                 bool antagonized = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0x26A18F47));
                 bool meleePressed = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((int)0xB2F377E8));
 
-                if (greeted)
-                    ApplyNaturalAffinityChange(record, id, "greet", "saludar", 2, 1500);
-                if (antagonized)
-                    ApplyNaturalAffinityChange(record, id, "antagonize", "provocar", -3, 1500);
-                if (meleePressed)
-                    LastPlayerMeleeActionAtById[id] = now;
+                Ped aimedTarget = FindAimedRecruitedPed(instance, player);
+                Ped target = aimedTarget;
+                if ((target == null || !target.Exists()) && meleePressed)
+                    target = FindNearestTrackedRecruit(player, 3.0f);
 
-                int previousHealth;
-                bool hasPreviousHealth = LastAffinityObservedHealthById.TryGetValue(id, out previousHealth);
-                int currentHealth = target.Health;
-                if (hasPreviousHealth && currentHealth < previousHealth)
+                if (target != null && target.Exists())
                 {
-                    int lastMelee;
-                    bool meleeWasRecent = LastPlayerMeleeActionAtById.TryGetValue(id, out lastMelee) &&
-                        now >= lastMelee && now - lastMelee <= 1800;
-                    bool playerShotRecently = now >= _lastPlayerWeaponFireAt &&
-                        now - _lastPlayerWeaponFireAt <= 1800;
+                    CachedRosterRecord cached;
+                    if (RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) &&
+                        cached != null && cached.Record != null &&
+                        IsRecruitedRosterRecord(cached.Record) && !IsExiledRosterRecord(cached.Record))
+                    {
+                        object record = cached.Record;
+                        string id = GetMember(record, "Id") as string;
+                        if (!string.IsNullOrWhiteSpace(id))
+                        {
+                            // Greet/antagonize only count when RDR2's lock-on system identifies this
+                            // recruit. A nearby NPC is a fallback only for physical interactions.
+                            if (aimedTarget != null && greeted)
+                                ApplyNaturalAffinityChange(record, id, "greet", "saludar", 2, 1500);
+                            if (aimedTarget != null && antagonized)
+                                ApplyNaturalAffinityChange(record, id, "antagonize", "provocar", -3, 1500);
 
-                    if (meleeWasRecent)
-                    {
-                        ApplyNaturalAffinityChange(record, id, "physical", "agresión física", -5, 2500);
-                        LastPlayerMeleeActionAtById.Remove(id);
-                    }
-                    else if (playerShotRecently)
-                    {
-                        ApplyNaturalAffinityChange(record, id, "physical", "disparo al compañero", -8, 2500);
+                            if (meleePressed)
+                            {
+                                LastPlayerMeleeActionAtById[id] = now;
+                                LastAffinityObservedHealthById[id] = target.Health;
+                            }
+
+                            int previousHealth;
+                            bool hasPreviousHealth = LastAffinityObservedHealthById.TryGetValue(id, out previousHealth);
+                            int currentHealth = target.Health;
+                            if (hasPreviousHealth && currentHealth < previousHealth)
+                            {
+                                int lastMelee;
+                                bool meleeWasRecent = LastPlayerMeleeActionAtById.TryGetValue(id, out lastMelee) &&
+                                    now >= lastMelee && now - lastMelee <= 1800;
+                                bool playerShotRecently = now >= _lastPlayerWeaponFireAt &&
+                                    now - _lastPlayerWeaponFireAt <= 1800;
+
+                                if (meleeWasRecent)
+                                {
+                                    ApplyNaturalAffinityChange(record, id, "physical", "agresión física", -5, 2500);
+                                    LastPlayerMeleeActionAtById.Remove(id);
+                                }
+                                else if (aimedTarget != null && playerShotRecently)
+                                {
+                                    // This is a short-window heuristic because the game API exposed
+                                    // here does not attribute every health delta to its exact source.
+                                    ApplyNaturalAffinityChange(record, id, "physical", "daño tras disparo del jugador", -8, 2500);
+                                }
+                            }
+                            LastAffinityObservedHealthById[id] = currentHealth;
+                        }
                     }
                 }
-                LastAffinityObservedHealthById[id] = currentHealth;
 
-                int lastMeleeAction;
-                if (LastPlayerMeleeActionAtById.TryGetValue(id, out lastMeleeAction) &&
-                    now >= lastMeleeAction && now - lastMeleeAction <= 1800 &&
-                    target.Position.DistanceTo(player.Position) <= 4.0f)
-                {
-                    bool shoved = false;
-                    try
-                    {
-                        // PED::_HAS_PED_BEEN_SHOVED_RECENTLY(Ped, ms).
-                        shoved = Function.Call<bool>(0x29FCE825613FEFCAUL,
-                            new InputArgument[] { target.Handle, 1400 });
-                    }
-                    catch { }
-
-                    if (shoved)
-                    {
-                        ApplyNaturalAffinityChange(record, id, "physical", "empujón", -5, 2500);
-                        LastPlayerMeleeActionAtById.Remove(id);
-                    }
-                }
+                ApplyPendingShoveAffinity(player, now);
             }
             catch (Exception ex)
             {
                 Log("Natural affinity interaction check warning: " + Unwrap(ex));
+            }
+        }
+
+        private static Ped FindNearestTrackedRecruit(Ped player, float radius)
+        {
+            if (player == null || !player.Exists()) return null;
+            Ped closest = null;
+            float bestDistance = radius;
+
+            foreach (KeyValuePair<int, CachedRosterRecord> pair in RosterRecordsByPedHandle.ToArray())
+            {
+                CachedRosterRecord cached = pair.Value;
+                if (cached == null || cached.Record == null || cached.Ped == null ||
+                    IsExiledRosterRecord(cached.Record) || !IsCachedRecruitedPed(pair.Key))
+                    continue;
+
+                try
+                {
+                    float distance = cached.Ped.Position.DistanceTo(player.Position);
+                    if (distance <= bestDistance)
+                    {
+                        bestDistance = distance;
+                        closest = cached.Ped;
+                    }
+                }
+                catch { }
+            }
+            return closest;
+        }
+
+        private static void ApplyPendingShoveAffinity(Ped player, int now)
+        {
+            if (player == null || !player.Exists() || LastPlayerMeleeActionAtById.Count == 0)
+                return;
+
+            foreach (KeyValuePair<string, int> pending in LastPlayerMeleeActionAtById.ToArray())
+            {
+                string id = pending.Key;
+                int actionAt = pending.Value;
+                if (now < actionAt || now - actionAt > 1800)
+                {
+                    LastPlayerMeleeActionAtById.Remove(id);
+                    continue;
+                }
+
+                CachedRosterRecord tracked = RosterRecordsByPedHandle.Values.FirstOrDefault(cached =>
+                    cached != null && cached.Record != null && cached.Ped != null &&
+                    string.Equals(GetMember(cached.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase));
+                if (tracked == null || tracked.Ped == null || !tracked.Ped.Exists() || tracked.Ped.IsDead ||
+                    IsExiledRosterRecord(tracked.Record))
+                    continue;
+
+                try
+                {
+                    if (tracked.Ped.Position.DistanceTo(player.Position) > 4.0f)
+                        continue;
+
+                    // PED::_HAS_PED_BEEN_SHOVED_RECENTLY(Ped, ms).
+                    bool shoved = Function.Call<bool>(0x29FCE825613FEFCAUL,
+                        new InputArgument[] { tracked.Ped.Handle, 1400 });
+                    if (!shoved)
+                        continue;
+
+                    ApplyNaturalAffinityChange(tracked.Record, id, "physical", "empujón", -5, 2500);
+                    LastPlayerMeleeActionAtById.Remove(id);
+                }
+                catch (Exception ex)
+                {
+                    Log("Natural shove affinity check warning: " + Unwrap(ex));
+                }
             }
         }
 
