@@ -972,14 +972,21 @@ namespace EnRAGECompanionsExtension
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(__0) ||
-                    !( __0.StartsWith("comp_", StringComparison.OrdinalIgnoreCase) ||
-                       __0.StartsWith("vdl_", StringComparison.OrdinalIgnoreCase)))
+                if (string.IsNullOrWhiteSpace(__0))
+                    return;
+
+                // DrawDetail passes Id.Substring(4): extcomp_foo becomes "omp_foo",
+                // and the legacy extvdl_foo format becomes "dl_foo".
+                string recordId;
+                if (__0.StartsWith("omp_", StringComparison.OrdinalIgnoreCase))
+                    recordId = "extc" + __0;
+                else if (__0.StartsWith("dl_", StringComparison.OrdinalIgnoreCase))
+                    recordId = "extv" + __0;
+                else
                     return;
 
                 CompanionStateStore store = CompanionStateRuntime.Store;
                 CompanionPersistentState state;
-                string recordId = "ext" + __0;
                 if (store != null && store.TryGet(recordId, out state) && state != null)
                     __result = Math.Max(-100, Math.Min(100, state.Affinity * 2 - 100));
             }
