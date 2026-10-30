@@ -3542,21 +3542,6 @@ namespace EnRAGECompanionsExtension
             }
         }
 
-        private static string FindRecordName(object instance, int handle)
-        {
-            if (_recordAt == null)
-                return null;
-            try
-            {
-                object record = _recordAt.Invoke(instance, new object[] { handle });
-                if (record == null)
-                    return null;
-                object name = GetMember(record, "Name");
-                return name as string;
-            }
-            catch { return null; }
-        }
-
         private static object GetTrackedRecord(object instance, int handle)
         {
             if (_recordAt == null)
@@ -3937,7 +3922,11 @@ namespace EnRAGECompanionsExtension
                 string generated = GetMember(generatedName, "Name") as string;
                 if (string.IsNullOrWhiteSpace(generated)) return null;
                 title = GetMember(generatedName, "Title") as string ?? string.Empty;
-                if (named != null) named[ped.Handle] = generatedName;
+                if (named != null)
+                {
+                    named[ped.Handle] = generatedName;
+                    SetField(instance, "_namesGiven", GetFieldInt(instance, "_namesGiven", 0) + 1);
+                }
                 Log("Resolved recruited NPC name through enRAGE NameByLook: " + generated + ".");
                 return generated;
             }
