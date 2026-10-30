@@ -47,6 +47,7 @@ namespace EnRAGECompanionsExtension
         private static Type _rosterMenuType;
         private static object _latestMainInstance;
         private static bool _installed;
+        private static bool _loggedNativeIncapacitationFailure;
         private static object _askContextInstance;
         private static int _genericPrompt;
         private static int _genericPromptFor;
@@ -511,13 +512,23 @@ namespace EnRAGECompanionsExtension
             if (ped == null || !ped.Exists() || ped.IsDead) return;
             try
             {
+                // Restore RDR2's fatal-wound/writhe behavior (CanWrithe maps to config flag 281=false).
+                PED.SET_PED_CONFIG_FLAG(ped.Handle, 281, false);
+            }
+            catch { }
+            try
+            {
                 // PED.SET_PED_CAN_BE_INCAPACITATED(Ped, BOOL).
                 Function.Call(0x5240864E847C691CUL,
                     new InputArgument[] { ped.Handle, true });
             }
             catch (Exception ex)
             {
-                Log("Could not enable native incapacitation for ped " + ped.Handle + ": " + Unwrap(ex));
+                if (!_loggedNativeIncapacitationFailure)
+                {
+                    _loggedNativeIncapacitationFailure = true;
+                    Log("Could not enable native incapacitation for ped " + ped.Handle + ": " + Unwrap(ex));
+                }
             }
         }
 
@@ -4575,7 +4586,7 @@ namespace EnRAGECompanionsExtension
             string formerGang = !string.IsNullOrWhiteSpace(gang) ? gang :
                 GetMember(record, "FormerGang") as string;
             if (string.IsNullOrWhiteSpace(formerGang))
-                formerGang = string.Equals(id, null, StringComparison.Ordinal) ? _recruitGangId : _recruitGangId;
+                formerGang = _recruitGangId;
 
             bool changed = false;
             if (!string.IsNullOrWhiteSpace(formerGang) && !string.Equals(gang, formerGang, StringComparison.OrdinalIgnoreCase))
