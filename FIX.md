@@ -147,7 +147,7 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 
 ### Fase 3 — órdenes individuales y espera
 
-- Las órdenes individuales aparecen como prompts contextuales solo al apuntar al ped exacto de un recluta activo y no expulsado. `Quédate aquí`/`Sígueme` usa F; E se reserva para ayudar a levantarse estando incapacitado. Mientras espera, el wrapper conserva `State=1`, y los hooks de `WaitToJoin`/`Ride` impiden que la IA de enRAGE sobrescriba el anclaje. Al expulsar al miembro se eliminan los prompts contextuales activos. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
+- Las órdenes individuales aparecen como prompts contextuales solo al apuntar al ped exacto de un recluta activo y no expulsado. La orden de descanso y el sistema de incapacitación/recuperación se retiraron; E ya no se reserva para reanimar reclutas.
 - `Quédate aquí` guarda coordenadas por ID estable de roster, aplica la tarea de anclaje inmediatamente y evita entrar en el estado `Ride` de enRAGE. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
@@ -158,13 +158,13 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 
 - El controlador fuerza la vulnerabilidad de los reclutas de la extensión frente al estado invulnerable que asignaba enRAGE al adoptar compañeros; evita además que un recluta de poca salud se quede en el estado `GoingHome` de enRAGE. Las lesiones se registran al superar `InjuryDamageThresholdPercent` de pérdida acumulada desde el baseline de salud. Cada lesión tiene gravedad y tiempo de recuperación por ID estable.
 - La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
-- El estado persistente `IsIncapacitated` se registra solo cuando `NemesisMod.WoundedDown(Ped)` devuelve verdadero: el ped debe estar en `IsIncapacitated` y `BulletImpact.LatestWound` debe devolver un informe de herida real. No se usa un umbral artificial de salud, ni el ragdoll común, ni `TASK_KNOCKED_OUT` para simular la caída. Una muerte que no cumple `WoundedDown` sigue siendo muerte.
-- Al apuntar al recluta que cumple `WoundedDown`, la única interacción contextual es `Ayudar a levantarse`. Mantener E invoca directamente el native RDR2 `_INCAPACITATED_REVIVE(Ped, Ped)` (hash `0xF6262491C7704A63`) con el recluta y quien ayuda. La recuperación queda en manos del motor; la extensión no usa `TASK_STAND_UP`, no asigna salud y no llama a `RESURRECT_PED`. La ayuda automática de otros reclutas utiliza el mismo native y el mismo filtro `WoundedDown`.
+- Se eliminó el estado persistente de incapacitación y cualquier intento de distinguir una caída recuperable de una muerte. Los reclutas mueren según el comportamiento normal del juego/enRAGE.
+- Se eliminaron el prompt contextual de recuperación, la llamada a `_INCAPACITATED_REVIVE` y la ayuda automática de reclutas incapacitados.
 - El remedio usa `RecruitMedicineCostCents`, `MedicineHealingPercent` y `MedicineRecoveryReductionSeconds`. Antes de cobrar valida el objetivo, excluye muertos confirmados y expulsados, y usa un bloqueo temporal por ID para reducir dobles cobros.
 
 ### Fase 5 — posturas de combate
 
-- El prompt de postura aparece al apuntar a un compañero activo solo cuando la detección encuentra un ped que está atacando al jugador. `Fuego a mi señal` requiere disparo del jugador en el momento actual o dentro de una ventana de 2,5 segundos.
+- Se retiraron las claves de texto de postura porque no se usan en prompts visibles del juego. La lógica interna de combate no se presenta como una función contextual disponible.
 
 ### Textos y traducciones de la extensión
 
@@ -181,7 +181,7 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 ### Endurecimiento adicional — tratamiento, reincorporación y recuperación del JSON
 
 - El tratamiento pagado ahora comprueba que la salud se haya aplicado realmente al ped vivo. Si no se confirma, intenta devolver el coste usando la firma de incremento de efectivo encontrada en el código decompilado de enRAGE; si la devolución falla, deja un error explícito en el log en lugar de anunciar un tratamiento exitoso.
-- La marca persistente se mantiene mientras el ped siga en el estado nativo de herida o en su animación física de caída; cuando queda vivo y erguido, se limpia y enRAGE retoma su seguimiento. Si muere y ya no cumple `WoundedDown`, el flujo de muertes confirma el fallecimiento.
+- El flujo de roster marca al recluta como fallecido cuando el juego confirma que el ped murió.
 - La carga del estado persistente intenta recuperar `EnRAGECompanionsExtension.companions.json.bak` cuando falta el archivo principal o no puede deserializarse. La copia primaria ilegible se conserva como archivo de cuarentena antes de restaurar el backup, cuando el sistema de archivos lo permite.
 - Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo, el levantamiento y la recuperación tras un JSON corrupto.
 
@@ -199,10 +199,10 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 
 ## Corrección — incapacitación nativa y liberación de fugitivos
 
-- Al adoptar o volver a asociar un recluta, la extensión habilita SET_PED_CAN_BE_INCAPACITATED y restaura el comportamiento CanWrithe (config flag 281 = false). Mantiene ambos ajustes durante el ciclo del compañero.
-- Cada recluta se registra además en el módulo enRAGE BulletImpact mediante TagVictim(ped, recordId, name). WoundedDown(Ped) no es una orden para provocar la caída: es una condición estricta que exige IsIncapacitated y un LatestWound presente en BulletImpact. La extensión prepara ahora al ped y su asociación con ese registro para que enRAGE pueda reconocer una herida real.
-- El prefijo de Ride ya no bloquea incondicionalmente la salida por salud baja. Solo la retrasa hasta 2 segundos cuando existe `BulletImpact.LatestWound` y `_GET_PED_CAN_BE_INCAPACITATED_THIS_FRAME` indica elegibilidad. Si falta cualquiera de esas condiciones o el motor no entra en `WoundedDown`, se ejecuta la retirada invulnerable original de enRAGE; el postfix no vuelve a quitar esa protección mientras el compañero está en `State=2`. El log registra el umbral nativo y el estado de elegibilidad para diagnóstico.
+- La extensión ya no cambia las banderas nativas de incapacitación ni de comportamiento de herida fatal.
+- Se retiró el registro especial de reclutas en BulletImpact destinado al flujo de recuperación por herida.
+- El hook de salud baja ya no intenta retrasar la huida para forzar una incapacitación. Se deja a enRAGE gestionar la retirada y al juego gestionar el daño letal.
 - Se eliminó la corrección anterior que intentaba volver a meter al grupo a cualquier compañero en State=2 con poca salud. Ese comportamiento podía cancelar una huida real. Ahora, cuando enRAGE envía al NPC a casa o el wrapper entra en GoingHome, la extensión quita su afiliación de la facción y lo saca de StoryRoster, sin añadirlo a la lista de expulsiones permanentes.
 - La limpieza del wrapper no borra las tareas actuales del ped: se restauran sus valores originales, se separa del grupo y se retira el seguimiento de la extensión sin sustituir la tarea de fuga/regreso. La despedida manual del jugador continúa conservando el registro.
 
-Verificación: se revisó estáticamente el flujo de Adopt, Ride, SendHome, GoingHome, WoundedDown, BulletImpact y Cleanup. No hay compilador C#/MSBuild ni runtime de RDR2 disponible en este entorno; la compilación y la comprobación in-game siguen pendientes. En particular, la caída depende de que el motor genere IsIncapacitated y enRAGE registre LatestWound para el daño concreto. No se llama a TASK_KNOCKED_OUT, no se asigna salud manualmente y no se resucita una muerte ordinaria.
+Verificación: se revisó estáticamente la eliminación del flujo de incapacitación y la conservación del registro de muerte. No hay compilador C#/MSBuild ni runtime de RDR2 disponible en este entorno; la compilación y la comprobación in-game siguen pendientes.
