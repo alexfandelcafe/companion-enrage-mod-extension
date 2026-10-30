@@ -86,8 +86,6 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastDamageBaselineById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> LastDamageAtById =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastHealthSampleAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastInjuryRecoveryAtById =
@@ -127,7 +125,7 @@ namespace EnRAGECompanionsExtension
             internal Ped Ped;
         }
         // A dismissed ambient ped keeps this association for the current session, so recruiting the
-        // same entity again reuses its persistent sheet instead of creating "Aliado 2", "Aliado 3", etc.
+        // same entity again reuses its enRAGE-named persistent roster record.
         private static readonly Dictionary<int, CachedRosterRecord> RosterRecordsByPedHandle = new Dictionary<int, CachedRosterRecord>();
         private static readonly Dictionary<string, uint> RecruitedRosterModels = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<int, string> AppliedPromptNames = new Dictionary<int, string>();
@@ -452,6 +450,15 @@ namespace EnRAGECompanionsExtension
                     if (ReleaseEscapedCompanion(__instance, companion)) continue;
                     MaintainCompanionInjury(__instance, companion);
                     MarkRecruitedCompanionDeath(__instance, companion);
+                    object companionRecord = GetField(companion, "Rec");
+                    if (companionRecord != null &&
+                        GetMember(companionRecord, "IsAlive") is bool memberAlive && !memberAlive)
+                    {
+                        // A confirmed death is terminal; do not let the companion cycle send this
+                        // wrapper into GoingHome/respawn logic or count it as an active recruit.
+                        SetField(companion, "State", 2);
+                        continue;
+                    }
                     int state = GetFieldInt(companion, "State", -1);
                     switch (state)
                     {
@@ -2636,13 +2643,28 @@ namespace EnRAGECompanionsExtension
             }
 
             object namingRecord = rosterRecord ?? trackedRecord;
+            if (namingRecord == null)
+            {
+                InvokeInstance(__instance, "ShowSubtitle", "No se pudo obtener el registro del NPC desde enRAGE; no se reclutó.");
+                Log("Recruitment cancelled: enRAGE did not provide a roster record for ped " + ped.Handle + ".");
+                return;
+            }
             ApplyMaximumRecruitFriendship(namingRecord);
             string name = GetMember(namingRecord, "Name") as string;
             if (string.IsNullOrWhiteSpace(name))
-                name = FindRecordName(__instance, ped.Handle);
+            {
+                string nativeTitle;
+                name = FindEnRagePedName(__instance, ped, out nativeTitle);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    SetMember(namingRecord, "Name", name);
+                    SetMember(namingRecord, "Title", nativeTitle ?? string.Empty);
+                }
+            }
             if (string.IsNullOrWhiteSpace(name))
             {
-                Log("Recruitment skipped because enRAGE did not provide a name for ped " + ped.Handle + ".");
+                InvokeInstance(__instance, "ShowSubtitle", "enRAGE no pudo asignar un nombre a este NPC; no se reclutó.");
+                Log("Recruitment cancelled: enRAGE did not resolve a native NPC name for ped " + ped.Handle + ".");
                 return;
             }
 
@@ -2729,6 +2751,11 @@ namespace EnRAGECompanionsExtension
                 return true;
 
             object record = GetField(companion, "Rec");
+            if (record != null && GetMember(record, "IsAlive") is bool recordAlive && !recordAlive)
+            {
+                __result = false;
+                return false;
+            }
             Ped player = __args[1] as Ped;
             uint modelHash;
             if (player == null || !player.Exists() || !ModelHashes.TryGetValue(key, out modelHash))
@@ -3441,21 +3468,6 @@ namespace EnRAGECompanionsExtension
             }
         }
 
-        private static string FindRecordName(object instance, int handle)
-        {
-            if (_recordAt == null)
-                return null;
-            try
-            {
-                object record = _recordAt.Invoke(instance, new object[] { handle });
-                if (record == null)
-                    return null;
-                object name = GetMember(record, "Name");
-                return name as string;
-            }
-            catch { return null; }
-        }
-
         private static object GetTrackedRecord(object instance, int handle)
         {
             if (_recordAt == null)
@@ -3526,8 +3538,13 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(zone))
                 zone = string.Empty;
 
-            string preferredName = FindNamedPedName(instance, ped.Handle);
-            string name = UniqueRosterName(instance, preferredName);
+            string nativeTitle;
+            string name = FindEnRagePedName(instance, ped, out nativeTitle);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                Log("Roster creation cancelled: enRAGE could not resolve a native name for ped " + ped.Handle + ".");
+                return null;
+            }
             string id = null;
             MethodInfo newIdMethod = FindMethod(_mainType, "NewId", 1, p => p[0].ParameterType == typeof(int));
             if (newIdMethod != null)
@@ -3553,7 +3570,7 @@ namespace EnRAGECompanionsExtension
                 return null;
             }
 
-            SetMember(created, "Title", string.Empty);
+            SetMember(created, "Title", nativeTitle ?? string.Empty);
             SetMember(created, "Rank", 1);
             SetMember(created, "RankXp", 0);
             SetMember(created, "PresumedDead", false);
@@ -3593,7 +3610,8 @@ namespace EnRAGECompanionsExtension
             if (roster == null)
                 return null;
 
-            string preferredName = FindNamedPedName(instance, ped.Handle);
+            string ignoredTitle;
+            string preferredName = FindEnRagePedName(instance, ped, out ignoredTitle);
             if (!string.IsNullOrWhiteSpace(preferredName))
             {
                 foreach (object record in roster)
@@ -3797,33 +3815,67 @@ namespace EnRAGECompanionsExtension
             return changed;
         }
 
-        private static string FindNamedPedName(object instance, int handle)
+        private static string FindEnRagePedName(object instance, Ped ped, out string title)
         {
-            try
+            title = string.Empty;
+            if (instance == null || ped == null || !ped.Exists())
+                return null;
+
+            object record = GetTrackedRecord(instance, ped.Handle);
+            string name = GetMember(record, "Name") as string;
+            if (!string.IsNullOrWhiteSpace(name))
             {
-                IDictionary named = GetField(instance, "_named") as IDictionary;
-                if (named != null && named.Contains(handle))
+                title = GetMember(record, "Title") as string ?? string.Empty;
+                return name;
+            }
+
+            IDictionary named = GetField(instance, "_named") as IDictionary;
+            if (named != null && named.Contains(ped.Handle))
+            {
+                object existing = named[ped.Handle];
+                name = GetMember(existing, "Name") as string;
+                if (!string.IsNullOrWhiteSpace(name))
                 {
-                    string existing = GetMember(named[handle], "Name") as string;
-                    if (!string.IsNullOrWhiteSpace(existing)) return existing;
+                    title = GetMember(existing, "Title") as string ?? string.Empty;
+                    return name;
                 }
             }
-            catch { }
+
+            // Follow enRAGE's own naming path. NameByLook is private, so resolve it by
+            // signature; the returned Named object is stored in _named exactly as enRAGE does.
             try
             {
-                object owner = instance ?? _latestMainInstance;
-                if (_whoIs != null && (_whoIs.IsStatic || owner != null))
+                if (!TryInstanceBool(instance, "LookReadable", ped))
                 {
-                    object resolved = _whoIs.Invoke(_whoIs.IsStatic ? null : owner, new object[] { handle });
-                    if (resolved is string name && !string.IsNullOrWhiteSpace(name)) return name;
+                    Log("enRAGE could not read the NPC appearance for native naming (ped " + ped.Handle + ").");
+                    return null;
                 }
+
+                MethodInfo nameByLook = FindMethod(_mainType, "NameByLook", 1,
+                    p => IsPedType(p[0].ParameterType));
+                if (nameByLook == null)
+                    throw new MissingMethodException(_mainType == null ? "NemesisMod" : _mainType.FullName, "NameByLook(Ped)");
+                if (named == null)
+                    throw new MissingFieldException(_mainType == null ? "NemesisMod" : _mainType.FullName, "_named");
+
+                object generated = nameByLook.Invoke(instance, new object[] { ped });
+                name = GetMember(generated, "Name") as string;
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                title = GetMember(generated, "Title") as string ?? string.Empty;
+                named[ped.Handle] = generated;
+                // enRAGE increments this counter at every call site that adds to _named.
+                SetField(instance, "_namesGiven", GetFieldInt(instance, "_namesGiven", 0) + 1);
+                Log("Resolved recruited NPC name through enRAGE NameByLook: " + name + ".");
+                return name;
             }
-            catch (Exception ex) { Log("enRAGE NPC name lookup warning: " + Unwrap(ex)); }
-            return null;
+            catch (Exception ex)
+            {
+                Log("Could not resolve enRAGE's native NPC name for ped " + ped.Handle + ": " + Unwrap(ex));
+                return null;
+            }
         }
-
-
-
 
         private static void CommitRosterRecord(object instance, object record, bool newlyCreated, int handle)
         {
@@ -4103,10 +4155,8 @@ namespace EnRAGECompanionsExtension
                     if (_genericPromptFor == cachedHandle) HideGenericRecruitPrompt();
                 }
                 RecruitedRosterModels.Remove(id);
-                ClearLowHealthIncapacitationTracking(id);
                 LastObservedHealthById.Remove(id);
                 LastDamageBaselineById.Remove(id);
-                LastDamageAtById.Remove(id);
                 LastHealthSampleAtById.Remove(id);
                 LastInjuryRecoveryAtById.Remove(id);
                 LastInjuryPersistAtById.Remove(id);
@@ -4194,10 +4244,8 @@ namespace EnRAGECompanionsExtension
             string dismissedId = GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty;
             LastObservedHealthById.Remove(dismissedId);
             LastDamageBaselineById.Remove(dismissedId);
-            LastDamageAtById.Remove(dismissedId);
             LastHealthSampleAtById.Remove(dismissedId);
             LastInjuryRecoveryAtById.Remove(dismissedId);
-            ClearLowHealthIncapacitationTracking(dismissedId);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
@@ -4285,7 +4333,6 @@ namespace EnRAGECompanionsExtension
             try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
             int previousHealth;
             if (LastObservedHealthById.TryGetValue(id, out previousHealth) && health < previousHealth)
-                LastDamageAtById[id] = now;
             int baseline;
             if (!LastDamageBaselineById.TryGetValue(id, out baseline))
             {
