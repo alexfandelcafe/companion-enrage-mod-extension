@@ -497,6 +497,9 @@ namespace EnRAGECompanionsExtension
                         // NemesisMod.Ride sends every companion below 30% health home before
                         // RDR2 can enter the incapacitated state. Suppress that branch so the
                         // native incapacitated state can be detected and recovered instead.
+                        Ped player = __args.Length > 1 ? __args[1] as Ped : null;
+                        if (player != null && player.Exists())
+                            InvokeInstance(__instance, "CompanionFight", companion, player);
                         return false;
                     }
                     if (!string.IsNullOrWhiteSpace(id))
