@@ -10,7 +10,7 @@ This project is a **separate ScriptHookRDR2DotNet V2 script** intended to integr
 - Intercepts `Ask(Ped, string, Ped)` for extension-only keys, avoiding the original `CampPeople[key]` lookup.
 - Creates enRAGE's private `Companion` object and calls enRAGE's own `Adopt` and `Setup` methods.
 - Adds each recruited pedestrian to enRAGE's persistent `Roster` under the faction configured by `RecruitGangId`. The default is Van der Linde (`vdl`): because this built-in faction is story-only and uses a separate `StoryRoster` for its F11 view, the extension mirrors `vdl` records into `StoryRoster`. Existing ordinary/custom factions use the normal `Roster` list filtered by `Gang`; the extension does not create the faction itself, so its ID must already exist in enRAGE. Existing records are reused; new `NemesisRecord` objects are created directly with the required roster fields to avoid `NewRecord` index errors for models/factions with empty name arrays.
-- Integrates recruited companions with enRAGE's native `WoundedDown` wound-incapacitation check. Only that wounded-down state (or the extension's recent-damage threshold for a still-living ped) is treated as recoverable; a confirmed death is not converted into an incapacitation. While down, the roster record is retained. The manual E-key recovery prompt is restored for a recruited companion in enRAGE's native wounded-down state; the separate custom wait-order prompt remains removed. The post-combat automatic-assistance path also remains.
+- Integrates recruited companions with enRAGE's exact `WoundedDown(Ped)` predicate. A recruit is recoverable only when the game reports `IsIncapacitated` and enRAGE's `BulletImpact` has a real `LatestWound` report; low health, ordinary ragdoll and gun-butt knockouts do not qualify. The E prompt and automatic assistance both require this native state. Holding E invokes RDR2's paired `_INCAPACITATED_REVIVE(Ped, Ped)` native, which owns the stand-up transition; the extension does not apply a simulated knockout task or inject health. Confirmed deaths outside `WoundedDown` remain deaths.
 - Changes the recruited companion's interaction from `Mandar al campamento` to `Dejar de seguirme`. Dismissing an extension recruit stops the active follow state but does not remove the persistent roster record. The extension also prevents the original recruitment location from being treated as a real camp.
 - Allows eligible ordinary **male** NPCs and enRAGE live-camp peds. Candidate detection and the final recruitment entry point both check the model-gender helper (`NemesisSystem.Models.Female`); female models never receive the recruitment prompt and cannot be recruited through the extension. A live-camp ped is removed from the matching internal camp list before adoption. Other enRAGE-managed roles are excluded in this prototype because their controllers need role-specific handoff logic.
 - Intercepts `SpawnCompanion` for extension recruits so the extension can respawn the original model by its stored model hash rather than trying to reverse-hash a model-name string.
@@ -55,7 +55,6 @@ AffinityTreatmentGain=3
 EnableInjurySystem=true
 InjuryDamageThresholdPercent=10
 InjuryRecoverySeconds=180
-IncapacitatedHealthPercent=35
 MedicineHealingPercent=100
 MedicineRecoveryReductionSeconds=60
 RecruitMedicineCostCents=100
@@ -73,7 +72,6 @@ RecruitMedicineCostCents=100
 - `EnableInjurySystem`: enables limited health-delta detection for active recruited companions; it does not infer injury from every animation or visible wound.
 - `InjuryDamageThresholdPercent`: cumulative health loss from the tracked baseline, as a percentage of max health, required to register an injury (1–50; default 10).
 - `InjuryRecoverySeconds`: injury recovery countdown in seconds (15–86400; default 180), persisted periodically.
-- `IncapacitatedHealthPercent`: health restored during an attempted incapacitation recovery (10–75; default 35).
 - `MedicineHealingPercent`: percentage of max health added by a paid treatment (1–100; default 100, capped at max health).
 - `MedicineRecoveryReductionSeconds`: recovery time removed by a treatment (0–86400; default 60).
 - `RecruitMedicineCostCents`: treatment price in cents (0–100000; default 100 = $1.00). A short per-record transaction window guards against duplicate prompt activations.
@@ -152,7 +150,7 @@ La orden contextual `Quédate aquí` y su alternancia `Sígueme` se han retirado
 ## Fase 4 — heridas, incapacitación y remedios
 
 - Se rastrean pérdidas de salud significativas en compañeros activos y se guarda una gravedad/temporizador por ID estable. La recuperación progresa mientras el compañero está vivo y no incapacitado.
-- La incapacitación persistente se integra con `WoundedDown(Ped)` de enRAGE. Para incapacitación simulada, la extensión usa `TASK_KNOCKED_OUT` con `isPermanent=true`, vuelve a imponer la tarea si el NPC se levanta antes de recibir ayuda y bloquea las órdenes normales de seguimiento mientras siga incapacitado. El prompt con E solo aparece cuando el NPC realmente está abatido; desaparece cuando vuelve a estar erguido. La recuperación puede usar `_INCAPACITATED_REVIVE` cuando el wrapper está disponible y no llama a `RESURRECT_PED`. Una muerte confirmada que ya no cumple el estado nativo de herida se registra como tal. Tras el combate, otro recluta activo dentro del radio de búsqueda puede acercarse para ayudar automáticamente.
+- La incapacitación recuperable usa exclusivamente `WoundedDown(Ped)` de enRAGE: `IsIncapacitated` del motor más un `LatestWound` real de `BulletImpact`. Ni la salud baja, ni un ragdoll corriente, ni un knockout con culata bastan. El prompt E y la ayuda automática exigen ese estado nativo. Mantener E llama directamente a `_INCAPACITATED_REVIVE(Ped, Ped)` de RDR2 para que el juego gestione la recuperación; la extensión ya no fuerza `TASK_KNOCKED_OUT`, no asigna salud y no resucita muertes confirmadas.
 - El remedio usa coste, curación inmediata y reducción de recuperación configurables; excluye muertos confirmados y expulsados y aplica una ventana por registro para reducir los cobros duplicados.
 - Es una integración de código fuente con el estado de herida de enRAGE, no una reproducción idéntica de su gestor de combate. Si el ped deja de cumplir la condición de herida y se confirma una muerte real, el registro se marca como muerto; no se usa `RESURRECT_PED` para forzar una recuperación. La animación sincronizada y los wrappers de la API deben probarse en la versión instalada.
 
