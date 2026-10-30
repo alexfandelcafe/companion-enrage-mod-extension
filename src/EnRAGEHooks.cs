@@ -61,9 +61,8 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
-        // Use three separate actions for the custom prompts: context-no (F on the default layout),
-        // reload (R), and context-yes (E). Do not reuse E for normal orders: this was competing with
-        // the game's native interaction prompt on some target groups and made the G action disappear.
+        // Legacy control hashes remain for private helper methods but are no longer registered by
+        // the companion cycle. The unstable wait/order and manual E-recovery prompts are disabled.
         private const int IndividualOrderPromptControl = unchecked((int)0xDFF812F9); // F / context-no
         private const int IncapacitatedPromptControl = unchecked((int)0xCEFD9220); // E while orders are hidden
         private const int CombatStancePromptControl = -2074855166; // H; medicine prompt is hidden during combat
@@ -5533,13 +5532,6 @@ namespace EnRAGECompanionsExtension
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                { "order.wait_disabled", "El modo de espera está desactivado en el archivo INI." },
-                { "order.need_called", "Primero debes llamar a este compañero desde el roster." },
-                { "order.not_found", "No se pudo localizar al compañero para aplicar la orden." },
-                { "order.following", "{0} vuelve a seguirte." },
-                { "order.waiting", "{0} esperará aquí." },
-                { "order.wait_label", "Quédate aquí" },
-                { "order.follow_label", "Sígueme" },
                 { "affinity.disabled", "La afinidad está desactivada en el archivo INI." },
                 { "affinity.status", "{0}: afinidad {1}/100." },
                 { "affinity.meter", "AFINIDAD {0}/100" },
@@ -5583,13 +5575,12 @@ namespace EnRAGECompanionsExtension
                 { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
                 { "companion.recruited", "{0} ahora combate de tu lado." },
                 { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
-                { "incapacitated.prompt", "Ayudar a levantarse" },
-                { "incapacitated.only_help", "Está incapacitado por una herida. La única interacción disponible es ayudarlo a levantarse." },
+                { "incapacitated.only_help", "Está incapacitado por una herida; espera a que se recupere o a que otro compañero lo ayude." },
                 { "incapacitated.revive_unavailable", "No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado." },
                 { "incapacitated.health_failed", "No se pudo restaurar la salud; el compañero sigue incapacitado." },
                 { "incapacitated.still_down", "El compañero todavía no puede levantarse; sigue incapacitado." },
                 { "incapacitated.verify_failed", "No se pudo verificar la recuperación; el compañero sigue incapacitado." },
-                { "incapacitated.entered", "{0} ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse." },
+                { "incapacitated.entered", "{0} ha quedado incapacitado. Puede recuperarse con el tiempo o recibir ayuda de otro compañero." },
                 { "incapacitated.helped", "{0} se ha levantado. La herida seguirá recuperándose con el tiempo." },
                 { "stance.prefix", "Postura: {0}" },
                 { "stance.hold", "Mantener posición" },
