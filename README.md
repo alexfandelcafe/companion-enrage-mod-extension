@@ -150,24 +150,24 @@ La orden contextual `Quédate aquí` y su alternancia `Sígueme` se han retirado
 ## Fase 4 — heridas, incapacitación y remedios
 
 - Se rastrean pérdidas de salud significativas en compañeros activos y se guarda una gravedad/temporizador por ID estable. La recuperación progresa mientras el compañero está vivo y no incapacitado.
-- La incapacitación recuperable usa exclusivamente `WoundedDown(Ped)` de enRAGE: `IsIncapacitated` del motor más un `LatestWound` real de `BulletImpact`. Ni la salud baja, ni un ragdoll corriente, ni un knockout con culata bastan. El prompt E y la ayuda automática exigen ese estado nativo. Mantener E llama directamente a `_INCAPACITATED_REVIVE(Ped, Ped)` de RDR2 para que el juego gestione la recuperación; la extensión ya no fuerza `TASK_KNOCKED_OUT`, no asigna salud y no resucita muertes confirmadas.
-- Para no dejar morir al recluta cuando enRAGE llega al 30 %, la extensión solo retrasa `Ride()` si `BulletImpact.LatestWound` ya existe y `_GET_PED_CAN_BE_INCAPACITATED_THIS_FRAME` devuelve verdadero. La espera dura como máximo 2 segundos. Si falta el informe, el motor no lo considera elegible o no aparece `WoundedDown`, se restaura la retirada protegida original de enRAGE; la extensión ya no mantiene al NPC indefinidamente vulnerable. El log incluye salud, umbral nativo, elegibilidad, `IsIncapacitated` y presencia de `LatestWound`.
+- Se eliminó el sistema de incapacitación y recuperación: los reclutas ya no reciben prompts ni intentos de reanimación de la extensión. El daño y la muerte quedan en manos de RDR2/enRAGE.
+- La extensión no intercepta el estado de incapacitación ni intenta impedir la muerte cuando el recluta recibe daño letal. La retirada original de enRAGE queda bajo el control del mod.
 - El remedio usa coste, curación inmediata y reducción de recuperación configurables; excluye muertos confirmados y expulsados y aplica una ventana por registro para reducir los cobros duplicados.
 - Es una integración de código fuente con el estado de herida de enRAGE, no una reproducción idéntica de su gestor de combate. Si el ped deja de cumplir la condición de herida y se confirma una muerte real, el registro se marca como muerto; no se usa `RESURRECT_PED` para forzar una recuperación. La animación sincronizada y los wrappers de la API deben probarse en la versión instalada.
 
 ## Fase 5 — posturas de combate
 
-- El prompt de postura aparece al apuntar a un compañero activo solo cuando se detecta un NPC que está atacando al jugador. Las posturas se guardan por roster; `Fuego a mi señal` requiere un disparo actual o reciente.
+- Las claves de texto para las posturas se retiraron del catálogo porque no hay un prompt funcional que las muestre en el juego. La lógica interna de combate que use el estado guardado no se anuncia como una opción contextual disponible.
 
 La afinidad por interacciones naturales, las heridas, la recuperación asistida y los prompts restantes son cambios de código fuente y siguen sin validación dentro de RDR2. La orden de espera y el prompt manual de E están desactivados. Esta rama no modifica `main` ni fusiona el PR.
 
 
 ## Native wounded state and escape handling
 
-- Recruited peds are configured to use RDR2's native incapacitation (SET_PED_CAN_BE_INCAPACITATED) and fatal-wound/writhe behavior (the ScriptHook CanWrithe equivalent, config flag 281 set to false). The extension also registers each recruit with enRAGE's BulletImpact.TagVictim, so enRAGE's WoundedDown(Ped) can evaluate the recruit against its own wound reports.
+- The extension no longer configures native incapacitation/writhe behavior or registers recruits for a custom wound-recovery path.
 - When using Ped Damage Overhaul / PDOR, follow enRAGE's published compatibility settings: keep `scripts\\BulletImpact.ini` `[Wounds] Enabled=True`, with `PlayerDamage=1.0`, `Crippling=False` and `KillShots=False` when PDO owns damage/wound handling. For PDOR 1.38.2 with enRAGE handling survivors, set `DyingStateChance=0` and `FleeKill_Enabled=0` in `PedDamageOverhaul.ini`. See [enRAGE's compatibility notes](https://www.nexusmods.com/reddeadredemption2/mods/10967?tab=description).
-- Below 30% health, the Ride hook suppresses enRAGE's escape branch only when BulletImpact has a real LatestWound and RDR2 reports that the ped can be incapacitated this frame. It waits up to 2 seconds for native WoundedDown; if the wound or native eligibility is missing, or the state does not arrive in time, the original enRAGE invincible flee/head-home branch runs. The extension preserves that invincibility while enRAGE changes the companion to GoingHome. The log records native incapacitation health, eligibility, IsIncapacitated and LatestWound for diagnosis.
+- The extension leaves enRAGE's low-health escape/death behavior unmodified by the removed incapacitation feature.
 - If enRAGE sends a recruit home or changes its companion state to GoingHome for another reason, the extension clears the recruit's faction affiliation and removes its entry from StoryRoster. The current flee/head-home task is preserved; the roster record is not permanently exiled, so the NPC may be recruited again later.
-- Manual player dismissal remains separate and retains the persistent roster record. Native wounded recovery continues to use the enRAGE WoundedDown predicate and the paired RDR2 revive native.
+- Manual player dismissal remains separate and retains the persistent roster record. No custom wounded recovery or paired revive native is used.
 
-These changes are source-level only. A local build and in-game validation are still required, particularly to confirm that the installed game/enRAGE version records a wound for each supported damage source and enters WoundedDown rather than killing the recruit outright.
+These changes are source-level only. A local build and in-game validation are still required.
