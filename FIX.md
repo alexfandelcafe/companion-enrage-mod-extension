@@ -187,3 +187,11 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 
 
 - **Limitación pendiente de detección de daño:** el controlador utiliza un baseline acumulado de salud y un umbral configurable, pero no atribuye exhaustivamente cada pérdida al jugador, a un NPC hostil, a una caída o al entorno. Esta distinción requiere una API de atribución de daño fiable y una prueba dentro de la versión objetivo.
+
+
+## Corrección actual — afinidad por interacciones y retirada de la orden de espera
+
+- La afinidad persistente responde a interacciones nativas al apuntar al recluta: saludar suma 2, provocar resta 3, un ataque físico/empujón detectado resta 5 y un disparo que dañe al recluta resta 8. Las acciones tienen limitación temporal por registro para evitar contabilizarlas cada frame.
+- Se retiraron del ciclo del juego el prompt contextual de `Quédate aquí` y el prompt manual de recuperación con E. Los valores antiguos `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se quitan del INI al cargar la extensión; los estados persistentes `Waiting`/ `ReturningToPosition` se migran a `Following`.
+- La ruta de ayuda automática a compañeros incapacitados se conserva; ya no se muestra la interacción manual con E.
+- Revisión de código fuente únicamente. No se pudo compilar ni probar dentro de RDR2 en este entorno; verificar en el juego que saludo/provocación ajusten el medidor correcto y que los compañeros sigan normalmente después de cargar estados antiguos.
