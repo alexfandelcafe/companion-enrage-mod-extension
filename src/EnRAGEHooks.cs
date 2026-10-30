@@ -495,8 +495,8 @@ namespace EnRAGECompanionsExtension
                             Log("Suppressed enRAGE low-health flee for recruit " + id +
                                 " until native incapacitation can take over.");
                         // NemesisMod.Ride sends every companion below 30% health home before
-                        // RDR2 can enter the incapacitated state. Keep its task cycle alive,
-                        // but do not let that branch turn a wound into a flee/departure.
+                        // RDR2 can enter the incapacitated state. Suppress that branch so the
+                        // native incapacitated state can be detected and recovered instead.
                         return false;
                     }
                     if (!string.IsNullOrWhiteSpace(id))
@@ -3039,7 +3039,11 @@ namespace EnRAGECompanionsExtension
                 Ped departingPed = GetField(companion, "Ped") as Ped;
                 if (departingPed == null || !departingPed.Exists())
                     departingPed = GetField(companion, "Real") as Ped;
-                ForgetRecruitPedTracking(departingPed, GetMember(recruitedRecord, "Id") as string);
+                string departingId = GetMember(recruitedRecord, "Id") as string;
+                ForgetRecruitPedTracking(departingPed, departingId);
+                ModelHashes.Remove(key);
+                InvokeInstance(__instance, "ShowSubtitle",
+                    TF("companion.escaped", GetField(companion, "Name") as string ?? T("companion.default")));
                 return true;
             }
             catch (Exception ex)
@@ -4744,6 +4748,7 @@ namespace EnRAGECompanionsExtension
             }
             ForgetRecruitPedTracking(ped, id);
             ModelHashes.Remove(key);
+            InvokeInstance(instance, "ShowSubtitle", TF("companion.escaped", name));
             Log("Released fleeing/returning companion " + name +
                 " from extension control without interrupting its current task.");
             return true;
@@ -5481,6 +5486,7 @@ namespace EnRAGECompanionsExtension
                 { "companion.default", "Tu compañero" },
                 { "companion.ally", "Tu aliado" },
                 { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
+                { "companion.escaped", "{0} huyó y dejó de formar parte de tu banda." },
                 { "companion.recruited", "{0} ahora combate de tu lado." },
                 { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
                 { "incapacitated.only_help", "Está incapacitado por una herida. Apúntale y mantén E para ayudarlo a levantarse." },
