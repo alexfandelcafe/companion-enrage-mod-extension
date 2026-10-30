@@ -61,7 +61,9 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
-        // The unstable wait/order and manual E-recovery prompts have been removed.
+        // Manual E-key wound recovery remains available; the unstable custom wait/follow-order prompt is removed.
+        // Keep wounded-down recovery available on E; only the separate wait/follow order prompt stays removed.
+        private const int IncapacitatedPromptControl = unchecked((int)0xCEFD9220); // context-yes / E
         private const int CombatStancePromptControl = -2074855166; // H; medicine prompt is hidden during combat
         private static int _incapacitatedPrompt;
         private static int _incapacitatedPromptFor;
@@ -501,9 +503,8 @@ namespace EnRAGECompanionsExtension
                     InvokeInstance(__instance, "UpdateAsk", player);
 
                 UpdateGenericRecruitPrompt(__instance, player);
-                // Removed the unstable "Quédate aquí" order prompt and the E-key manual recovery
-                // prompt. Do not register either custom action; clean up any stale prompt handles.
-                HideIncapacitatedPrompt();
+                // Manual wounded-down recovery is retained; only the custom wait/follow order was removed.
+                UpdateIncapacitatedPrompt(__instance, player);
                 HideIndividualOrderPrompts();
                 UpdateCombatStancePrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
@@ -2421,6 +2422,91 @@ namespace EnRAGECompanionsExtension
         private static void HideIndividualOrderPrompts()
         {
             HideIndividualOrderPrompt();
+        }
+
+        private static void UpdateIncapacitatedPrompt(object instance, Ped player)
+        {
+            try
+            {
+                if (player == null || !player.Exists())
+                {
+                    HideIncapacitatedPrompt();
+                    return;
+                }
+
+                Ped target = FindAimedRecruitedPed(instance, player);
+                CachedRosterRecord cached;
+                if (target == null || !target.Exists() ||
+                    !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
+                    cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
+                    IsExiledRosterRecord(cached.Record) ||
+                    (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive))
+                {
+                    HideIncapacitatedPrompt();
+                    return;
+                }
+
+                CompanionPersistentState state = GetPersistentState(cached.Record, true);
+                string targetId = GetMember(cached.Record, "Id") as string;
+                int recoveryUntil;
+                if (!string.IsNullOrWhiteSpace(targetId) &&
+                    RecoveryAnimationUntilById.TryGetValue(targetId, out recoveryUntil) &&
+                    Game.GameTime < recoveryUntil)
+                {
+                    HideIncapacitatedPrompt();
+                    return;
+                }
+                bool down = IsNativeWoundedDown(instance, target) ||
+                    (state != null && state.Injury != null && state.Injury.IsIncapacitated && !target.IsDead);
+                if (!down)
+                {
+                    HideIncapacitatedPrompt();
+                    return;
+                }
+
+                HideIndividualOrderPrompts();
+                HideRecruitMedicinePrompt();
+                HideCombatStancePrompt();
+
+                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
+                if (_incapacitatedPrompt == 0 || _incapacitatedPromptFor != target.Handle ||
+                    _incapacitatedPromptGroup != group || !IsPromptValid(_incapacitatedPrompt))
+                {
+                    HideIncapacitatedPrompt();
+                    object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, IncapacitatedPromptControl);
+                    _incapacitatedPrompt = Convert.ToInt32(_makePrompt.Invoke(null,
+                        new object[] { control, T("incapacitated.prompt"), true, group }));
+                    _incapacitatedPromptFor = target.Handle;
+                    _incapacitatedPromptGroup = group;
+                    _incapacitatedPromptArmed = false;
+                    _incapacitatedPromptPed = target;
+                }
+                else
+                {
+                    _incapacitatedPromptPed = target;
+                }
+
+                if (_incapacitatedPrompt == 0) return;
+                HUD._UI_PROMPT_SET_VISIBLE(_incapacitatedPrompt, true);
+                HUD._UI_PROMPT_SET_ENABLED(_incapacitatedPrompt, true);
+                if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(_incapacitatedPrompt))
+                {
+                    _incapacitatedPromptArmed = true;
+                    return;
+                }
+                if (!_incapacitatedPromptArmed) return;
+
+                Ped selected = _incapacitatedPromptPed;
+                _incapacitatedPromptArmed = false;
+                HideIncapacitatedPrompt();
+                if (selected != null && selected.Exists() && selected.Handle == target.Handle)
+                    HelpIncapacitatedCompanion(instance, cached.Record, selected, player);
+            }
+            catch (Exception ex)
+            {
+                HideIncapacitatedPrompt();
+                Log("Incapacitated companion prompt failed: " + Unwrap(ex));
+            }
         }
 
         private static void HideIncapacitatedPrompt()
@@ -5332,12 +5418,13 @@ namespace EnRAGECompanionsExtension
                 { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
                 { "companion.recruited", "{0} ahora combate de tu lado." },
                 { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
-                { "incapacitated.only_help", "Está incapacitado por una herida; espera a que se recupere o a que otro compañero lo ayude." },
+                { "incapacitated.only_help", "Está incapacitado por una herida. Apúntale y mantén E para ayudarlo a levantarse." },
+                { "incapacitated.prompt", "Ayudar a levantarse" },
                 { "incapacitated.revive_unavailable", "No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado." },
                 { "incapacitated.health_failed", "No se pudo restaurar la salud; el compañero sigue incapacitado." },
                 { "incapacitated.still_down", "El compañero todavía no puede levantarse; sigue incapacitado." },
                 { "incapacitated.verify_failed", "No se pudo verificar la recuperación; el compañero sigue incapacitado." },
-                { "incapacitated.entered", "{0} ha quedado incapacitado. Puede recuperarse con el tiempo o recibir ayuda de otro compañero." },
+                { "incapacitated.entered", "{0} ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse." },
                 { "incapacitated.helped", "{0} se ha levantado. La herida seguirá recuperándose con el tiempo." },
                 { "stance.prefix", "Postura: {0}" },
                 { "stance.hold", "Mantener posición" },
