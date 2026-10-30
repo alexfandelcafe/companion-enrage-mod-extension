@@ -2751,8 +2751,12 @@ namespace EnRAGECompanionsExtension
                 return true;
 
             object record = GetField(companion, "Rec");
+            // SpawnCompanion can run before the postfix sees the death later in this tick.
+            // Inspect the original ped here and persist the death before enRAGE can clone it.
+            MarkRecruitedCompanionDeath(__instance, companion);
             if (record != null && GetMember(record, "IsAlive") is bool recordAlive && !recordAlive)
             {
+                SetField(companion, "State", 2);
                 __result = false;
                 return false;
             }
@@ -3845,6 +3849,12 @@ namespace EnRAGECompanionsExtension
             // signature; the returned Named object is stored in _named exactly as enRAGE does.
             try
             {
+                object config = GetMember(instance, "Config");
+                if (GetMember(config, "NamingEnabled") is bool namingEnabled && !namingEnabled)
+                {
+                    Log("enRAGE native NPC naming is disabled in its configuration.");
+                    return null;
+                }
                 if (!TryInstanceBool(instance, "LookReadable", ped))
                 {
                     Log("enRAGE could not read the NPC appearance for native naming (ped " + ped.Handle + ").");
