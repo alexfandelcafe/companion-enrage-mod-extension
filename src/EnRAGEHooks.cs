@@ -120,8 +120,6 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> RecoveryAnimationUntilById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> LastSimulatedKnockoutTaskAtById =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastPlayerWeaponFireAt = -100000;
         private static readonly Dictionary<string, int> LastMedicineTransactionAt =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -2448,11 +2446,7 @@ namespace EnRAGECompanionsExtension
                     HideIncapacitatedPrompt();
                     return;
                 }
-                bool nativeDown = IsNativeWoundedDown(instance, target);
-                bool persistentlyDown = state != null && state.Injury != null && state.Injury.IsIncapacitated;
-                bool bodyDown = target.IsIncapacitated || target.IsRagdoll;
-                // A saved incapacitation flag alone must not leave E visible after the NPC has stood up.
-                bool down = target.IsDead ? nativeDown : bodyDown && (nativeDown || persistentlyDown);
+                bool down = IsNativeWoundedDown(instance, target);
                 if (!down)
                 {
                     HideIncapacitatedPrompt();
@@ -2524,107 +2518,24 @@ namespace EnRAGECompanionsExtension
                 (GetMember(record, "IsAlive") is bool alive && !alive))
                 return false;
 
-            CompanionPersistentState state = GetPersistentState(record, false);
-            bool persistentlyDown = state != null && state.Injury != null && state.Injury.IsIncapacitated;
-            bool nativeWoundedDown = IsNativeWoundedDown(instance, ped);
-            if (!nativeWoundedDown && !(persistentlyDown && !ped.IsDead))
+            if (!IsNativeWoundedDown(instance, ped))
                 return false;
 
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id)) return false;
 
-            // Invoke the paired native only for enRAGE's actual wounded-down state. For
-            // extension-simulated incapacitation, use a stand-up task instead. Never call
-            // RESURRECT_PED: an ordinary death must not be brought back.
-            bool nativeStarted = nativeWoundedDown &&
-                TryInvokeNativeWrapper(typeof(PED), "_INCAPACITATED_REVIVE",
-                    new object[] { ped.Handle, helperPed.Handle });
+            // enRAGE's paired incapacitation native owns the recovery animation/state transition.
+            // Do not substitute TASK_STAND_UP, set health manually, or resurrect ordinary deaths.
+            bool nativeStarted = TryInvokeNativeWrapper(typeof(PED), "_INCAPACITATED_REVIVE",
+                new object[] { ped.Handle, helperPed.Handle });
             if (!nativeStarted)
             {
-                if (ped.IsDead)
-                {
-                    InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
-                    Log("Native incapacitated revive unavailable for " + id + "; did not resurrect dead ped.");
-                    return false;
-                }
-
-                bool stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true });
-                if (!stood) stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle });
-                if (!stood)
-                {
-                    InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
-                    return false;
-                }
+                InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
+                Log("enRAGE _INCAPACITATED_REVIVE could not start for " + id + ".");
+                return false;
             }
 
-            int maxHealth = 0;
-            try { maxHealth = ped.MaxHealth; } catch { }
-            if (maxHealth <= 0) maxHealth = 100;
-            int recoveryHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
-            if (!ped.IsDead)
-            {
-                try
-                {
-                    if (ped.Health < recoveryHealth) ped.Health = recoveryHealth;
-                    if (!ped.Exists() || ped.IsDead || ped.Health <= 0)
-                    {
-                        InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
-                        return false;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log("Could not restore health while helping incapacitated companion: " + Unwrap(ex));
-                    return false;
-                }
-            }
-            else
-            {
-                // The paired native can complete asynchronously while the wrapper still reports
-                // IsDead. Protect this short transition from death cleanup and movement-order tasks.
-                RecoveryAnimationUntilById[id] = Game.GameTime + 3000;
-                LastAutoAssistAtById[id] = Game.GameTime + 8000;
-                object helperRecordPending = GetTrackedRecord(instance, helperPed.Handle);
-                string helperPendingId = GetMember(helperRecordPending, "Id") as string;
-                if (!string.IsNullOrWhiteSpace(helperPendingId))
-                    RecoveryAnimationUntilById[helperPendingId] = Game.GameTime + 2200;
-                return true;
-            }
-
-            try
-            {
-                if (!nativeStarted)
-                {
-                    if (!TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true }))
-                        TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, 900 });
-                }
-            }
-            catch { }
-
-            if (state == null) state = GetPersistentState(record, true);
-            if (state != null && state.Injury != null)
-            {
-                state.Injury.IsIncapacitated = false;
-                state.Injury.IncapacitatedSinceUtcTicks = 0;
-                state.Injury.IsInjured = state.Injury.Severity > 0 || state.Injury.RecoverySecondsRemaining > 0;
-                SavePersistentState(state);
-            }
-            LastSimulatedKnockoutTaskAtById.Remove(id);
-            SetMember(record, "IsAlive", true);
-            SetMember(record, "PresumedDead", false);
-
-            object companion = FindActiveExtensionCompanion(instance, id);
-            if (companion != null && state != null && state.FollowState == CompanionFollowState.Following)
-            {
-                SetField(companion, "State", 0);
-                SetField(companion, "AskedAt", Game.GameTime);
-            }
-            LastObservedHealthById[id] = ped.Health;
-            LastDamageBaselineById[id] = ped.Health;
-            LastHealthSampleAtById[id] = Game.GameTime;
-            LastDamageAtById.Remove(id);
-            LastInjuryRecoveryAtById[id] = Game.GameTime;
-            RecoveryAnimationUntilById[id] = Game.GameTime + 2200;
+            RecoveryAnimationUntilById[id] = Game.GameTime + 4500;
             LastAutoAssistAtById[id] = Game.GameTime + 8000;
 
             object helperRecord = GetTrackedRecord(instance, helperPed.Handle);
@@ -2632,8 +2543,8 @@ namespace EnRAGECompanionsExtension
             if (!string.IsNullOrWhiteSpace(helperId))
                 RecoveryAnimationUntilById[helperId] = Game.GameTime + 2200;
 
-            try { InvokeInstance(instance, "SaveRoster"); } catch { }
-            InvokeInstance(instance, "ShowSubtitle", TF("incapacitated.helped", GetMember(record, "Name") as string ?? T("companion.default")));
+            Log("Started native incapacitated recovery for " + id +
+                " using helper ped " + helperPed.Handle + ".");
             return true;
         }
 
@@ -2671,14 +2582,7 @@ namespace EnRAGECompanionsExtension
                 if (target == null || !target.Exists()) target = GetField(downedCompanion, "Real") as Ped;
                 if (target == null || !target.Exists()) continue;
 
-                CompanionPersistentState targetState = GetPersistentState(record, false);
-                bool targetNativeDown = IsNativeWoundedDown(instance, target);
-                bool targetPersistentlyDown = targetState != null && targetState.Injury != null &&
-                    targetState.Injury.IsIncapacitated;
-                bool targetBodyDown = target.IsIncapacitated || target.IsRagdoll;
-                bool downed = target.IsDead ? targetNativeDown :
-                    targetBodyDown && (targetNativeDown || targetPersistentlyDown);
-                if (!downed) continue;
+                if (!IsNativeWoundedDown(instance, target)) continue;
 
                 string id = GetMember(record, "Id") as string;
                 if (string.IsNullOrWhiteSpace(id)) continue;
@@ -4690,9 +4594,16 @@ namespace EnRAGECompanionsExtension
                 persistent.Injury.IsIncapacitated;
             if (isPersistentlyIncapacitated)
             {
-                // Keep an incapacitated but still-living ped from taking a lethal follow-up hit.
-                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
-                return;
+                string id = GetMember(GetField(companion, "Rec"), "Id") as string;
+                int recoveryUntil;
+                bool recovering = !string.IsNullOrWhiteSpace(id) &&
+                    RecoveryAnimationUntilById.TryGetValue(id, out recoveryUntil) && Game.GameTime < recoveryUntil;
+                // Let RDR2/enRAGE own the injury and revive; do not make the wounded ped invincible.
+                if (IsNativeWoundedDown(_latestMainInstance, ped) || recovering)
+                {
+                    try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+                    return;
+                }
             }
             try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
             if (state == 2 && health > 0 &&
@@ -4761,13 +4672,7 @@ namespace EnRAGECompanionsExtension
                 bool targetDown = false;
                 if (!cancelAssist)
                 {
-                    CompanionPersistentState targetState = GetPersistentState(targetRecord, false);
-                    bool targetNativeDown = IsNativeWoundedDown(instance, targetPed);
-                    bool targetPersistentlyDown = targetState != null && targetState.Injury != null &&
-                        targetState.Injury.IsIncapacitated;
-                    bool targetBodyDown = targetPed.IsIncapacitated || targetPed.IsRagdoll;
-                    targetDown = targetPed.IsDead ? targetNativeDown :
-                        targetBodyDown && (targetNativeDown || targetPersistentlyDown);
+                    targetDown = IsNativeWoundedDown(instance, targetPed);
                     if (!targetDown) cancelAssist = true;
                 }
 
@@ -4827,51 +4732,42 @@ namespace EnRAGECompanionsExtension
             try { health = ped.Health; } catch { }
             try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { maxHealth = 1; }
 
+
             if (state.Injury.IsIncapacitated)
             {
-                int recoveredHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
                 bool nativeDown = IsNativeWoundedDown(instance, ped);
                 bool bodyDown = ped.IsIncapacitated || ped.IsRagdoll;
-                bool stillDown = ped.IsDead ? nativeDown : bodyDown;
 
-                // A real death must not be converted into a recoverable injury unless enRAGE still
-                // recognizes its native wounded-down state. Let the ordinary death handler record it.
                 if (ped.IsDead && !nativeDown)
                 {
                     state.Injury.IsIncapacitated = false;
                     state.Injury.IncapacitatedSinceUtcTicks = 0;
-                    LastSimulatedKnockoutTaskAtById.Remove(id);
                     SavePersistentState(state);
                     return false;
                 }
 
-                // Only clear a native asynchronous revive after its animation window completed.
-                // A simulated knock-out must otherwise remain down until the E / helper recovery path runs.
-                if (recoveryWindowExpired && !ped.IsDead && !nativeDown && !stillDown && health >= recoveredHealth)
+                // Keep the companion out of the normal movement cycle while native incapacitation
+                // or its physical down animation is active. RDR2 owns the actual state/animation.
+                if (nativeDown || bodyDown)
                 {
-                    state.Injury.IsIncapacitated = false;
-                    state.Injury.IncapacitatedSinceUtcTicks = 0;
-                    state.Injury.IsInjured = state.Injury.Severity > 0 || state.Injury.RecoverySecondsRemaining > 0;
-                    LastSimulatedKnockoutTaskAtById.Remove(id);
-                    SavePersistentState(state);
-                    SetMember(record, "IsAlive", true);
-                    SetMember(record, "PresumedDead", false);
                     try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
-                    LastObservedHealthById[id] = health;
-                    LastDamageBaselineById[id] = health;
-                    LastHealthSampleAtById[id] = now;
-                    LastDamageAtById.Remove(id);
-                    LastInjuryRecoveryAtById[id] = now;
-                    try { InvokeInstance(instance, "SaveRoster"); } catch { }
-                }
-                else
-                {
-                    if (!ped.IsDead && !stillDown)
-                        EnsureSimulatedKnockoutTask(id, ped, now);
-                    // Do not allow enRAGE to run WaitToJoin/Ride while this recruit is incapacitated.
-                    try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
                     return true;
                 }
+
+                // The native transition ended and the ped is upright.
+                state.Injury.IsIncapacitated = false;
+                state.Injury.IncapacitatedSinceUtcTicks = 0;
+                state.Injury.IsInjured = state.Injury.Severity > 0 || state.Injury.RecoverySecondsRemaining > 0;
+                SavePersistentState(state);
+                SetMember(record, "IsAlive", true);
+                SetMember(record, "PresumedDead", false);
+                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+                LastObservedHealthById[id] = health;
+                LastDamageBaselineById[id] = health;
+                LastHealthSampleAtById[id] = now;
+                LastDamageAtById.Remove(id);
+                LastInjuryRecoveryAtById[id] = now;
+                try { InvokeInstance(instance, "SaveRoster"); } catch { }
             }
 
             // enRAGE's Adopt marks real companions invincible. Re-enable damage before sampling.
@@ -4973,58 +4869,16 @@ namespace EnRAGECompanionsExtension
         }
         private static bool IsLikelyIncapacitated(object instance, object record, Ped ped, string id)
         {
-            if (ped == null || !ped.Exists()) return false;
-            if (IsNativeWoundedDown(instance, ped)) return true;
-            if (_woundedDown == null)
-            {
-                try { if (ped.IsIncapacitated) return true; } catch { }
-            }
-            // Some RDR2 ped types do not expose IsRagdoll reliably while going down.
-            // A recently damaged recruit at or below 20% health should still enter the recoverable
-            // incapacitated state; TryEnterIncapacitated applies the knocked-out task when possible.
-            if (!ped.IsDead && _enableInjurySystem)
-            {
-                int lastDamage, maxHealth = 1, health = 0;
-                try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
-                try { health = ped.Health; } catch { }
-                int threshold = Math.Max(1, (int)Math.Ceiling(maxHealth * 0.20));
-                if (health > 0 && health <= threshold && !string.IsNullOrWhiteSpace(id) &&
-                    LastDamageAtById.TryGetValue(id, out lastDamage) && Game.GameTime >= lastDamage &&
-                    Game.GameTime - lastDamage <= 10000)
-                    return true;
-            }
-            CompanionPersistentState state = GetPersistentState(record, false);
-            if (ped.IsDead)
-            {
-                // A dead ped is recoverable only while enRAGE still recognizes its native
-                // wound-incapacitation state. Do not turn an ordinary death into a revive.
-                if (_woundedDown == null)
-                {
-                    try { if (TryStaticBool("LooksKnockedOut", ped)) return true; } catch { }
-                }
-                return false;
-            }
-            if (state != null && state.Injury != null && state.Injury.IsIncapacitated &&
-                (ped.IsIncapacitated || ped.IsRagdoll)) return true;
-            return false;
+            return ped != null && ped.Exists() && IsNativeWoundedDown(instance, ped);
         }
 
         private static bool IsNativeWoundedDown(object instance, Ped ped)
         {
-            if (ped == null || !ped.Exists()) return false;
-            if (_woundedDown != null)
-            {
-                object owner = instance ?? _latestMainInstance;
-                if (owner == null) return false;
-                try { return _woundedDown.Invoke(owner, new object[] { ped }) is bool down && down; }
-                catch (Exception ex) { Log("Native WoundedDown check failed: " + Unwrap(ex)); return false; }
-            }
-            try
-            {
-                if (ped.IsIncapacitated && (!ped.IsDead || TryStaticBool("LooksKnockedOut", ped))) return true;
-            }
-            catch { }
-            return false;
+            if (ped == null || !ped.Exists() || _woundedDown == null) return false;
+            object owner = instance ?? _latestMainInstance;
+            if (owner == null) return false;
+            try { return _woundedDown.Invoke(owner, new object[] { ped }) is bool down && down; }
+            catch (Exception ex) { Log("Native WoundedDown check failed: " + Unwrap(ex)); return false; }
         }
 
         private static bool IsRosterRecordIncapacitated(object record)
@@ -5050,30 +4904,13 @@ namespace EnRAGECompanionsExtension
             if (_woundedDown == null) try { return ped.IsIncapacitated; } catch { }
             return false;
         }
-        private static void EnsureSimulatedKnockoutTask(string id, Ped ped, int now)
-        {
-            if (string.IsNullOrWhiteSpace(id) || ped == null || !ped.Exists() || ped.IsDead)
-                return;
-
-            int lastTaskAt;
-            if (LastSimulatedKnockoutTaskAtById.TryGetValue(id, out lastTaskAt) &&
-                now >= lastTaskAt && now - lastTaskAt < 1800)
-                return;
-
-            // Duration is seconds; isPermanent=true prevents the knock-out task from expiring
-            // and letting enRAGE's normal follow task make the recruit run away again.
-            bool applied = TryInvokeTaskNative("TASK_KNOCKED_OUT", new object[] { ped.Handle, 600.0f, true });
-            LastSimulatedKnockoutTaskAtById[id] = now;
-            if (!applied)
-                Log("WARNING: could not apply TASK_KNOCKED_OUT to incapacitated recruit " + id + ".");
-        }
-
         private static bool TryEnterIncapacitated(object instance, object record, Ped ped)
         {
             if (instance == null || record == null || ped == null || !ped.Exists() ||
                 IsExiledRosterRecord(record) || (GetMember(record, "IsAlive") is bool alive && !alive)) return false;
             string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id) || !IsRecruitedRosterRecord(record)) return false;
+            if (string.IsNullOrWhiteSpace(id) || !IsRecruitedRosterRecord(record) ||
+                !IsNativeWoundedDown(instance, ped)) return false;
             CompanionPersistentState state = GetPersistentState(record, true);
             if (state == null || state.Injury == null) return false;
 
@@ -5098,12 +4935,6 @@ namespace EnRAGECompanionsExtension
                 Math.Abs(oldRecovery - state.Injury.RecoverySecondsRemaining) > 0.01 ||
                 oldFirstInjured != state.Injury.FirstInjuredUtcTicks || oldSince != state.Injury.IncapacitatedSinceUtcTicks ||
                 !rosterAlive || presumedDead;
-
-            if (!ped.IsDead && !IsNativeWoundedDown(instance, ped))
-            {
-                // Simulated incapacitation must persist until the player or another recruit helps.
-                EnsureSimulatedKnockoutTask(id, ped, Game.GameTime);
-            }
 
             if (changed)
             {
