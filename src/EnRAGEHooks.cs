@@ -4163,6 +4163,30 @@ namespace EnRAGECompanionsExtension
             return false;
         }
 
+        private static void TagRecruitedPedForNativeWounds(object instance, Ped ped, object record)
+        {
+            if (instance == null || ped == null || !ped.Exists() || record == null) return;
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id)) return;
+            object bulletImpact = GetField(instance, "_bulletImpact");
+            if (bulletImpact == null) return;
+            try
+            {
+                MethodInfo tagVictim = FindMethod(bulletImpact.GetType(), "TagVictim", 3,
+                    p => p[0].ParameterType == typeof(int) &&
+                         p[1].ParameterType == typeof(string) &&
+                         p[2].ParameterType == typeof(string));
+                if (tagVictim == null) return;
+                string name = GetMember(record, "FullName") as string ??
+                    GetMember(record, "Name") as string ?? string.Empty;
+                tagVictim.Invoke(bulletImpact, new object[] { ped.Handle, id, name });
+            }
+            catch (Exception ex)
+            {
+                Log("Could not register recruit " + id + " with enRAGE BulletImpact: " + Unwrap(ex));
+            }
+        }
+
         private static void CacheRosterRecord(int handle, uint modelHash, object record, Ped ped)
         {
             if (record == null)
@@ -4178,6 +4202,8 @@ namespace EnRAGECompanionsExtension
                 ApplyPendingFullHealthIfNeeded(record, ped);
                 if (ped != null && ped.Exists() && !string.IsNullOrWhiteSpace(id))
                 {
+                    EnableNativeIncapacitation(ped);
+                    TagRecruitedPedForNativeWounds(_latestMainInstance, ped, record);
                     if (!LastObservedHealthById.ContainsKey(id))
                         LastObservedHealthById[id] = ped.Health;
                     if (!LastDamageBaselineById.ContainsKey(id))
