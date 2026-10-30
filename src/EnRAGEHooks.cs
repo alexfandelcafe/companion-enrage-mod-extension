@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -39,7 +39,6 @@ namespace EnRAGECompanionsExtension
         private static MethodInfo _promptValid;
         private static MethodInfo _interrogable;
         private static MethodInfo _updateInterrogation;
-        private static MethodInfo _woundedDown;
         private static MethodInfo _companionFight;
         private static MethodInfo _modelFemale;
         private static bool _loggedMissingModelGender;
@@ -61,29 +60,6 @@ namespace EnRAGECompanionsExtension
         private static int _medicinePromptGroup;
         private static bool _medicinePromptArmed;
         private static Ped _medicinePromptPed;
-        // Use three separate actions for the custom prompts: context-no (F on the default layout),
-        // reload (R), and context-yes (E). Do not reuse E for normal orders: this was competing with
-        // the game's native interaction prompt on some target groups and made the G action disappear.
-        private const int IndividualOrderPromptControl = unchecked((int)0xDFF812F9); // F / context-no
-        private const int IncapacitatedPromptControl = unchecked((int)0xCEFD9220); // E while orders are hidden
-        private const int CombatStancePromptControl = -2074855166; // H; medicine prompt is hidden during combat
-        private static int _incapacitatedPrompt;
-        private static int _incapacitatedPromptFor;
-        private static int _incapacitatedPromptGroup;
-        private static bool _incapacitatedPromptArmed;
-        private static Ped _incapacitatedPromptPed;
-        private static int _combatStancePrompt;
-        private static int _combatStancePromptFor;
-        private static int _combatStancePromptGroup;
-        private static bool _combatStancePromptArmed;
-        private static Ped _combatStancePromptPed;
-        private static string _combatStancePromptLabel;
-        private static int _individualOrderPrompt;
-        private static int _individualOrderPromptFor;
-        private static int _individualOrderPromptGroup;
-        private static bool _individualOrderPromptArmed;
-        private static Ped _individualOrderPromptPed;
-        private static string _individualOrderPromptLabel;
         private static int _maxCompanions = 3;
         // Default affiliation is Van der Linde for compatibility. Both settings can target an
         // existing faction in enRAGE; the player-friendly relationship group is independent of it.
@@ -96,21 +72,16 @@ namespace EnRAGECompanionsExtension
         private static int _affinityTravelGain = 1;
         private static int _affinityCombatGain = 2;
         private static int _affinityTreatmentGain = 3;
-        private static bool _enableIndividualOrders = true;
-        private static bool _enableWaitMode = true;
-        private static float _waitRadius = 8.0f;
+        // Legacy INI keys are stripped at startup; persisted wait states migrate back to Following.
         private static bool _enableInjurySystem = true;
         private static int _injuryDamageThresholdPercent = 10;
         private static int _injuryRecoverySeconds = 180;
-        private static int _incapacitatedHealthPercent = 35;
         private static int _medicineHealingPercent = 100;
         private static int _medicineRecoveryReductionSeconds = 60;
         private static int _recruitMedicineCostCents = 100;
         private static readonly Dictionary<string, string> DefaultExtensionTexts = CreateDefaultExtensionTexts();
         private static readonly Dictionary<string, string> ExtensionTexts =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> LastIndividualOrderTaskAt =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastObservedHealthById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastDamageBaselineById =
@@ -123,18 +94,7 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastInjuryPersistAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> LastAutoAssistAtById =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, string> AutoAssistTargetByHelperId =
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> LastAutoAssistMoveAtByHelperId =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> RecoveryAnimationUntilById =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static int _lastPlayerWeaponFireAt = -100000;
         private static readonly Dictionary<string, int> LastMedicineTransactionAt =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, int> LastPlayerFireAtById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private sealed class AffinityTravelTracker
         {
@@ -144,6 +104,12 @@ namespace EnRAGECompanionsExtension
         private static readonly Dictionary<string, AffinityTravelTracker> AffinityTravelTrackers =
             new Dictionary<string, AffinityTravelTracker>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastAffinityCombatAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastNaturalAffinityActionAt =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastPlayerMeleeActionAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastAffinityObservedHealthById =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static int _lastStoryRosterSyncAt = -100000;
         private static int _lastRelationshipMaintenanceAt = -100000;
@@ -205,6 +171,8 @@ namespace EnRAGECompanionsExtension
                 _recordAt = FindMethod(_mainType, "RecordAt", 1, p => p[0].ParameterType == typeof(int));
                 _regardOfRecord = FindMethod(_mainType, "RegardOfRecord", 1,
                     p => p[0].ParameterType.Name == "NemesisRecord");
+                MethodInfo regardEarned = FindMethod(_mainType, "RegardEarned", 1,
+                    p => p[0].ParameterType == typeof(string));
                 _roleOf = FindMethod(_mainType, "RoleOf", 1, p => p[0].ParameterType == typeof(int));
                 _whoIs = FindMethod(_mainType, "WhoIs", 1, p => p[0].ParameterType == typeof(int));
                 _makePrompt = FindMethod(_mainType, "MakePrompt", 4, p =>
@@ -214,7 +182,6 @@ namespace EnRAGECompanionsExtension
                 _promptValid = FindMethod(_mainType, "PromptValid", 1, p => p[0].ParameterType == typeof(int));
                 _interrogable = FindMethod(_mainType, "Interrogable", 3, p => IsPedType(p[0].ParameterType) && IsPedType(p[1].ParameterType) && p[2].ParameterType == typeof(float));
                 _updateInterrogation = FindMethod(_mainType, "UpdateInterrogation", 1, p => IsPedType(p[0].ParameterType));
-                _woundedDown = FindMethod(_mainType, "WoundedDown", 1, p => IsPedType(p[0].ParameterType));
                 _companionFight = FindMethod(_mainType, "CompanionFight", 2,
                     p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
                 Type modelsType = _mainType.Assembly.GetType("NemesisSystem.Models", false);
@@ -226,8 +193,6 @@ namespace EnRAGECompanionsExtension
                 MethodInfo updateCompanion = FindMethod(_mainType, "UpdateCompanion", 1, p => IsPedType(p[0].ParameterType));
                 MethodInfo ask = FindMethod(_mainType, "Ask", 3, p => IsPedType(p[0].ParameterType) && p[1].ParameterType == typeof(string) && IsPedType(p[2].ParameterType));
                 MethodInfo spawnCompanion = FindMethod(_mainType, "SpawnCompanion", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
-                MethodInfo waitToJoin = FindMethod(_mainType, "WaitToJoin", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
-                MethodInfo ride = FindMethod(_mainType, "Ride", 2, p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
                 MethodInfo cleanup = FindMethod(_mainType, "Cleanup", 1, p => p[0].ParameterType.Name == "Companion");
                 MethodInfo restoreReal = FindMethod(_mainType, "RestoreReal", 1, p => p[0].ParameterType.Name == "Companion");
 
@@ -270,9 +235,11 @@ namespace EnRAGECompanionsExtension
                 if (_rosterMenuType != null)
                 {
                     MethodInfo detailActions = FindMethod(_rosterMenuType, "DetailActions", 0);
+                    MethodInfo drawDetail = FindMethod(_rosterMenuType, "DrawDetail", 0);
                     MethodInfo activateDetail = FindMethod(_rosterMenuType, "ActivateDetail", 0);
                     MethodInfo handleDetailKey = FindMethod(_rosterMenuType, "HandleDetailKey", 1);
                     if (detailActions != null) _harmony.Patch(detailActions, postfix: Hook(nameof(DetailActionsPostfix)));
+                    if (drawDetail != null) _harmony.Patch(drawDetail, transpiler: Hook(nameof(DrawDetailAffinityTranspiler)));
                     if (activateDetail != null) _harmony.Patch(activateDetail, prefix: Hook(nameof(ActivateDetailPrefix)));
                     if (handleDetailKey != null) _harmony.Patch(handleDetailKey, prefix: Hook(nameof(HandleDetailKeyPrefix)));
                 }
@@ -284,10 +251,6 @@ namespace EnRAGECompanionsExtension
                 if (_whoIs != null)
                     _harmony.Patch(_whoIs, postfix: Hook(nameof(WhoIsPostfix)));
                 _harmony.Patch(spawnCompanion, prefix: Hook(nameof(SpawnCompanionPrefix)));
-                // Waiting/incapacitated extension recruits must not have enRAGE's stock movement
-                // methods overwrite the order task after UpdateCompanion runs.
-                if (waitToJoin != null) _harmony.Patch(waitToJoin, prefix: Hook(nameof(CompanionMovementOrderPrefix)));
-                if (ride != null) _harmony.Patch(ride, prefix: Hook(nameof(CompanionMovementOrderPrefix)));
                 // enRAGE's stock CompanionFight attacks every hated target around the player once
                 // any nearby combat starts. Extension recruits use a strict retaliatory policy.
                 _harmony.Patch(_companionFight, prefix: Hook(nameof(CompanionFightPrefix)));
@@ -296,6 +259,8 @@ namespace EnRAGECompanionsExtension
                     _harmony.Patch(_recordAt, postfix: Hook(nameof(RecordAtPostfix)));
                 if (_regardOfRecord != null)
                     _harmony.Patch(_regardOfRecord, postfix: Hook(nameof(RegardOfRecordPostfix)));
+                if (regardEarned != null)
+                    _harmony.Patch(regardEarned, postfix: Hook(nameof(RegardEarnedPostfix)));
 
                 if (cleanup != null)
                     _harmony.Patch(cleanup, postfix: Hook(nameof(CleanupPostfix)));
@@ -454,26 +419,12 @@ namespace EnRAGECompanionsExtension
             SetField(__instance, "_companionsOffDone", true);
         }
 
-        private static bool CompanionMovementOrderPrefix(object __instance, object[] __args)
-        {
-            try
-            {
-                if (__args == null || __args.Length == 0) return true;
-                object companion = __args[0];
-                string key = GetField(companion, "Key") as string;
-                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
-                    return true;
 
-                object record = GetField(companion, "Rec");
-                CompanionPersistentState state = GetPersistentState(record, false);
-                if (state == null) return true;
-                if (state.FollowState == CompanionFollowState.Waiting ||
-                    (state.Injury != null && state.Injury.IsIncapacitated))
-                    return false;
-            }
-            catch (Exception ex) { Log("Companion movement order guard warning: " + Unwrap(ex)); }
-            return true;
-        }
+
+
+
+
+
 
         private static void CompanionCyclePostfix(object __instance, object[] __args)
         {
@@ -481,44 +432,26 @@ namespace EnRAGECompanionsExtension
             {
                 if (__args == null || __args.Length == 0 || !(__args[0] is Ped player) || player == null || !player.Exists())
                     return;
-                try { if (PED.IS_PED_SHOOTING(player.Handle)) _lastPlayerWeaponFireAt = Game.GameTime; } catch { }
                 SyncVanDerLindeStoryRoster(__instance, false);
                 UpdateCachedRecruitedPedDeaths(__instance);
                 MaintainDismissedRecruitRelationships(__instance, player);
                 MaintainRecruitedFriendship(__instance);
                 MaintainRecruitedIdentity(__instance);
                 MaintainAffinityTravel(__instance, player);
-
-                Ped stockAskTarget = GetField(__instance, "_askPed") as Ped;
-                if (stockAskTarget != null && stockAskTarget.Exists() && IsPedIncapacitatedRecruit(stockAskTarget))
-                    InvokeInstance(__instance, "HideAskPrompt");
-                else
-                    InvokeInstance(__instance, "UpdateAsk", player);
-
+                UpdateNaturalAffinityInteractions(__instance, player);
+                InvokeInstance(__instance, "UpdateAsk", player);
                 UpdateGenericRecruitPrompt(__instance, player);
-                UpdateIncapacitatedPrompt(__instance, player);
-                UpdateCombatStancePrompt(__instance, player);
                 UpdateRecruitMedicinePrompt(__instance, player);
-                UpdateIndividualOrderPrompts(__instance, player);
-
                 IList list = GetField(__instance, "_comps") as IList;
                 if (list == null || list.Count == 0) return;
                 object[] snapshot = list.Cast<object>().ToArray();
-                TryAutoAssistIncapacitatedCompanions(__instance, player, snapshot);
                 foreach (object companion in snapshot)
                 {
                     if (companion == null) continue;
-                    if (MaintainCompanionCondition(__instance, companion, player))
-                    {
-                        MaintainExtensionCompanionDamageability(companion, player);
-                        continue;
-                    }
+                    NormalizeRemovedWaitState(GetPersistentState(GetField(companion, "Rec"), false));
+                    if (ReleaseEscapedCompanion(__instance, companion)) continue;
+                    MaintainCompanionInjury(__instance, companion);
                     MarkRecruitedCompanionDeath(__instance, companion);
-                    if (MaintainIndividualCompanionOrder(__instance, companion, player))
-                    {
-                        MaintainExtensionCompanionDamageability(companion, player);
-                        continue;
-                    }
                     int state = GetFieldInt(companion, "State", -1);
                     switch (state)
                     {
@@ -531,6 +464,7 @@ namespace EnRAGECompanionsExtension
             }
             catch (Exception ex) { Log("Companion cycle error: " + Unwrap(ex)); }
         }
+
 
         private static void RecordAtPostfix(int __0, ref object __result)
         {
@@ -550,6 +484,7 @@ namespace EnRAGECompanionsExtension
                 string id = GetMember(record, "Id") as string;
                 uint modelHash = ConvertToUInt32(GetMember(record, "ModelHash"));
                 if (record == null || modelHash == 0U || string.IsNullOrWhiteSpace(id) ||
+                    string.IsNullOrWhiteSpace(GetMember(record, "Gang") as string) ||
                     !(id.StartsWith("extcomp_", StringComparison.OrdinalIgnoreCase) ||
                       id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase)))
                     return;
@@ -774,6 +709,18 @@ namespace EnRAGECompanionsExtension
             }
             return null;
         }
+        private static void NormalizeRemovedWaitState(CompanionPersistentState state)
+        {
+            if (state == null || (state.FollowState != CompanionFollowState.Waiting &&
+                state.FollowState != CompanionFollowState.ReturningToPosition))
+                return;
+
+            state.FollowState = CompanionFollowState.Following;
+            if (state.SavedPosition != null)
+                state.SavedPosition.HasValue = false;
+            SavePersistentState(state);
+        }
+
         private static void SetPersistentFollowState(object record, CompanionFollowState followState, Ped anchorPed)
         {
             CompanionPersistentState state = GetPersistentState(record, true);
@@ -799,119 +746,6 @@ namespace EnRAGECompanionsExtension
             else if (state.SavedPosition != null)
                 state.SavedPosition.HasValue = false;
             SavePersistentState(state);
-        }
-        private static void SetIndividualCompanionOrder(object instance, object record, CompanionFollowState order)
-        {
-            if (instance == null || record == null || !_enableIndividualOrders) return;
-            if (order != CompanionFollowState.Waiting && order != CompanionFollowState.Following) return;
-            if (IsRosterRecordIncapacitated(record))
-            {
-                InvokeInstance(instance, "ShowSubtitle", T("incapacitated.only_help"));
-                return;
-            }
-            if (order == CompanionFollowState.Waiting && !_enableWaitMode)
-            {
-                InvokeInstance(instance, "ShowSubtitle", "El modo de espera está desactivado en el archivo INI.");
-                return;
-            }
-
-            string id = GetMember(record, "Id") as string;
-            object companion = FindActiveExtensionCompanion(instance, id);
-            if (companion == null)
-            {
-                InvokeInstance(instance, "ShowSubtitle", "Primero debes llamar a este compañero desde el roster.");
-                return;
-            }
-            Ped ped = GetField(companion, "Ped") as Ped;
-            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
-            if (ped == null || !ped.Exists() || ped.IsDead)
-            {
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo localizar al compañero para aplicar la orden.");
-                return;
-            }
-
-            SetPersistentFollowState(record, order, ped);
-            LastIndividualOrderTaskAt.Remove(id ?? string.Empty);
-            try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
-            SetField(companion, "State", order == CompanionFollowState.Waiting ? 1 : 0);
-            SetField(companion, "AskedAt", Game.GameTime);
-            if (order == CompanionFollowState.Following)
-            {
-                InvokeInstance(instance, "ShowSubtitle", TF("order.following", GetMember(record, "Name") as string ?? T("companion.default")));
-                return;
-            }
-            if (ped.IsOnMount)
-                try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
-            CompanionPersistentState waitingState = GetPersistentState(record, false);
-            if (waitingState != null) MaintainAnchoredCompanionTask(id, ped, waitingState);
-            InvokeInstance(instance, "ShowSubtitle", TF("order.waiting", GetMember(record, "Name") as string ?? T("companion.default")));
-        }
-        private static bool MaintainIndividualCompanionOrder(object instance, object companion, Ped player)
-        {
-            if (!_enableIndividualOrders || companion == null) return false;
-            string key = GetField(companion, "Key") as string;
-            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return false;
-            object record = GetField(companion, "Rec");
-            string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id)) return false;
-            CompanionPersistentState state = GetPersistentState(record, false);
-            if (state == null) return false;
-
-            // Migrate a saved Resting state from old builds to normal Following.
-            if (state.FollowState == CompanionFollowState.Resting)
-            {
-                state.FollowState = CompanionFollowState.Following;
-                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
-                SavePersistentState(state);
-                return false;
-            }
-            if (state.FollowState == CompanionFollowState.Waiting && !_enableWaitMode)
-            {
-                state.FollowState = CompanionFollowState.Following;
-                if (state.SavedPosition != null) state.SavedPosition.HasValue = false;
-                SavePersistentState(state);
-                return false;
-            }
-            if (state.FollowState != CompanionFollowState.Waiting) return false;
-
-            Ped ped = GetField(companion, "Ped") as Ped;
-            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
-            if (ped == null || !ped.Exists() || ped.IsDead) return true;
-            MaintainAnchoredCompanionTask(id, ped, state);
-            return true;
-        }
-        private static void MaintainAnchoredCompanionTask(string id, Ped ped, CompanionPersistentState state)
-        {
-            if (ped == null || !ped.Exists() || state == null) return;
-            if (state.SavedPosition == null) state.SavedPosition = new CompanionSavedPosition();
-            if (!state.SavedPosition.HasValue)
-            {
-                var pos = ped.Position;
-                state.SavedPosition.HasValue = true;
-                state.SavedPosition.X = pos.X; state.SavedPosition.Y = pos.Y; state.SavedPosition.Z = pos.Z;
-                try { state.SavedPosition.Heading = ped.Heading; } catch { state.SavedPosition.Heading = 0f; }
-                SavePersistentState(state);
-            }
-
-            int now = Game.GameTime, last;
-            if (LastIndividualOrderTaskAt.TryGetValue(id, out last) && now >= last && now - last < 1400) return;
-            LastIndividualOrderTaskAt[id] = now;
-            if (ped.IsOnMount)
-            {
-                try { TASK.TASK_DISMOUNT_ANIMAL(ped.Handle, 0, 0UL, 0UL, 0UL, 0); } catch { }
-                return;
-            }
-
-            float dx = ped.Position.X - state.SavedPosition.X;
-            float dy = ped.Position.Y - state.SavedPosition.Y;
-            float dz = ped.Position.Z - state.SavedPosition.Z;
-            if ((float)Math.Sqrt(dx * dx + dy * dy + dz * dz) > _waitRadius)
-            {
-                if (!TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD", new object[] { ped.Handle, state.SavedPosition.X, state.SavedPosition.Y, state.SavedPosition.Z, 1.0f, 10000, state.SavedPosition.Heading, 1.0f }))
-                    Log("TASK_GO_STRAIGHT_TO_COORD wrapper unavailable; held companion " + id + " could not return.");
-            }
-            else if (!TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, -1 }))
-                TryInvokeTaskNative("TASK_PAUSE", new object[] { ped.Handle, -1 });
         }
         private static bool TryInvokeNativeWrapper(Type nativeType, string methodName, object[] args)
         {
@@ -1003,6 +837,94 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex) { Log("Native story regard meter sync warning: " + Unwrap(ex)); }
         }
 
+        // The original RosterMenu only renders its built-in "HACIA TI" meter inside the
+        // NemesisRecord.Story branch. Recruits deliberately stay Story=false to avoid changing
+        // enRAGE's story lifecycle, even when the VDL view contains them. Widen only the display
+        // condition for those VDL recruit sheets so the existing native meter and drawing code run.
+        private static IEnumerable<CodeInstruction> DrawDetailAffinityTranspiler(IEnumerable<CodeInstruction> instructions)
+        {
+            List<CodeInstruction> codes = instructions.ToList();
+            try
+            {
+                Type recordType = _mainType == null ? null : _mainType.Assembly.GetType("NemesisSystem.NemesisRecord", false);
+                PropertyInfo storyProperty = recordType == null ? null : recordType.GetProperty("Story", InstanceFlags);
+                MethodInfo storyGetter = storyProperty == null ? null : storyProperty.GetGetMethod(true);
+                MethodInfo replacement = typeof(EnRAGEHooks).GetMethod(
+                    nameof(ShouldDrawNativeStoryAffinitySection), BindingFlags.Static | BindingFlags.NonPublic);
+                bool patched = false;
+
+                if (storyGetter != null && replacement != null)
+                {
+                    for (int i = 0; i < codes.Count; i++)
+                    {
+                        if ((codes[i].opcode == OpCodes.Callvirt || codes[i].opcode == OpCodes.Call) &&
+                            codes[i].operand is MethodInfo called && called == storyGetter)
+                        {
+                            CodeInstruction instruction = new CodeInstruction(OpCodes.Call, replacement);
+                            instruction.labels.AddRange(codes[i].labels);
+                            instruction.blocks.AddRange(codes[i].blocks);
+                            codes[i] = instruction;
+                            patched = true;
+                            break;
+                        }
+                    }
+                }
+
+                Log(patched
+                    ? "RosterMenu.DrawDetail now uses enRAGE's native regard meter for VDL recruits."
+                    : "WARNING: could not locate the Story getter in RosterMenu.DrawDetail; native regard meter display was not patched.");
+            }
+            catch (Exception ex)
+            {
+                Log("Native regard meter transpiler failed: " + Unwrap(ex));
+            }
+            return codes;
+        }
+
+        private static bool ShouldDrawNativeStoryAffinitySection(object record)
+        {
+            try
+            {
+                if (record == null) return false;
+                if (GetMember(record, "Story") is bool story && story) return true;
+                if (!IsRecruitedRosterRecord(record) || !UsesVanDerLindeStoryRoster()) return false;
+                return string.Equals(GetMember(record, "Gang") as string, "vdl", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                Log("Native regard section eligibility check failed: " + Unwrap(ex));
+                return false;
+            }
+        }
+
+        // In the native detail view the explanatory line calls RegardEarned with Id.Substring(4).
+        // For extension IDs, map that synthetic key to the persistent affinity so the line stays
+        // consistent with the native meter instead of displaying the unrelated 0 + 0 story values.
+        private static void RegardEarnedPostfix(string __0, ref int __result)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(__0))
+                    return;
+
+                // DrawDetail passes Id.Substring(4): extcomp_foo becomes "omp_foo",
+                // and the legacy extvdl_foo format becomes "dl_foo".
+                string recordId;
+                if (__0.StartsWith("omp_", StringComparison.OrdinalIgnoreCase))
+                    recordId = "extc" + __0;
+                else if (__0.StartsWith("dl_", StringComparison.OrdinalIgnoreCase))
+                    recordId = "extv" + __0;
+                else
+                    return;
+
+                CompanionStateStore store = CompanionStateRuntime.Store;
+                CompanionPersistentState state;
+                if (store != null && store.TryGet(recordId, out state) && state != null)
+                    __result = Math.Max(-100, Math.Min(100, state.Affinity * 2 - 100));
+            }
+            catch (Exception ex) { Log("Native regard breakdown sync warning: " + Unwrap(ex)); }
+        }
+
         private static void AwardAffinity(object record, int gain, string reason)
         {
             if (!_enableAffinity || gain <= 0 || record == null) return;
@@ -1010,6 +932,178 @@ namespace EnRAGECompanionsExtension
             if (affinity >= 0)
                 Log("Affinity +" + gain + " (" + reason + ") for " +
                     ((GetMember(record, "Name") as string) ?? (GetMember(record, "Id") as string)) + "; now " + affinity + "/100.");
+        }
+
+        // Observe the game's existing lock-on interaction controls; no extension-owned UI is added.
+        // INPUT_INTERACT_LOCKON_POS = Greet, INPUT_INTERACT_LOCKON_NEG = Antagonize.
+        // Observe RDR2's existing lock-on controls; this does not create its own interaction UI.
+        // If melee is pressed without a retained lock-on target, associate it only with a very
+        // nearby cached recruit and wait for the native shove signal before changing affinity.
+        private static void UpdateNaturalAffinityInteractions(object instance, Ped player)
+        {
+            if (!_enableAffinity || instance == null || player == null || !player.Exists())
+                return;
+
+            try
+            {
+                int now = Game.GameTime;
+                bool greeted = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((uint)0xF63A17F9));
+                bool antagonized = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((uint)0x26A18F47));
+                bool meleePressed = PAD.IS_CONTROL_JUST_PRESSED(0, unchecked((uint)0xB2F377E8));
+
+                Ped aimedTarget = FindAimedRecruitedPed(instance, player);
+                Ped target = aimedTarget;
+                if ((target == null || !target.Exists()) && meleePressed)
+                    target = FindNearestTrackedRecruit(player, 3.0f);
+
+                if (target != null && target.Exists())
+                {
+                    CachedRosterRecord cached;
+                    if (RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) &&
+                        cached != null && cached.Record != null &&
+                        IsRecruitedRosterRecord(cached.Record) && !IsExiledRosterRecord(cached.Record))
+                    {
+                        object record = cached.Record;
+                        string id = GetMember(record, "Id") as string;
+                        if (!string.IsNullOrWhiteSpace(id))
+                        {
+                            // Greet/antagonize only count when RDR2's lock-on system identifies this
+                            // recruit. A nearby NPC is a fallback only for physical interactions.
+                            if (aimedTarget != null && greeted)
+                                ApplyNaturalAffinityChange(record, id, "greet", "saludar", 2, 1500);
+                            if (aimedTarget != null && antagonized)
+                                ApplyNaturalAffinityChange(record, id, "antagonize", "provocar", -3, 1500);
+
+                            if (meleePressed)
+                            {
+                                LastPlayerMeleeActionAtById[id] = now;
+                                LastAffinityObservedHealthById[id] = target.Health;
+                            }
+
+                            int previousHealth;
+                            bool hasPreviousHealth = LastAffinityObservedHealthById.TryGetValue(id, out previousHealth);
+                            int currentHealth = target.Health;
+                            if (hasPreviousHealth && currentHealth < previousHealth)
+                            {
+                                int lastMelee;
+                                bool meleeWasRecent = LastPlayerMeleeActionAtById.TryGetValue(id, out lastMelee) &&
+                                    now >= lastMelee && now - lastMelee <= 1800;
+                                bool playerShotRecently = now >= _lastPlayerWeaponFireAt &&
+                                    now - _lastPlayerWeaponFireAt <= 1800;
+
+                                if (meleeWasRecent)
+                                {
+                                    ApplyNaturalAffinityChange(record, id, "physical", "agresión física", -5, 2500);
+                                    LastPlayerMeleeActionAtById.Remove(id);
+                                }
+                                else if (aimedTarget != null && playerShotRecently)
+                                {
+                                    // This is a short-window heuristic because the game API exposed
+                                    // here does not attribute every health delta to its exact source.
+                                    ApplyNaturalAffinityChange(record, id, "physical", "daño tras disparo del jugador", -8, 2500);
+                                }
+                            }
+                            LastAffinityObservedHealthById[id] = currentHealth;
+                        }
+                    }
+                }
+
+                ApplyPendingShoveAffinity(player, now);
+            }
+            catch (Exception ex)
+            {
+                Log("Natural affinity interaction check warning: " + Unwrap(ex));
+            }
+        }
+
+        private static Ped FindNearestTrackedRecruit(Ped player, float radius)
+        {
+            if (player == null || !player.Exists()) return null;
+            Ped closest = null;
+            float bestDistance = radius;
+
+            foreach (KeyValuePair<int, CachedRosterRecord> pair in RosterRecordsByPedHandle.ToArray())
+            {
+                CachedRosterRecord cached = pair.Value;
+                if (cached == null || cached.Record == null || cached.Ped == null ||
+                    IsExiledRosterRecord(cached.Record) || !IsCachedRecruitedPed(pair.Key))
+                    continue;
+
+                try
+                {
+                    float distance = cached.Ped.Position.DistanceTo(player.Position);
+                    if (distance <= bestDistance)
+                    {
+                        bestDistance = distance;
+                        closest = cached.Ped;
+                    }
+                }
+                catch { }
+            }
+            return closest;
+        }
+
+        private static void ApplyPendingShoveAffinity(Ped player, int now)
+        {
+            if (player == null || !player.Exists() || LastPlayerMeleeActionAtById.Count == 0)
+                return;
+
+            foreach (KeyValuePair<string, int> pending in LastPlayerMeleeActionAtById.ToArray())
+            {
+                string id = pending.Key;
+                int actionAt = pending.Value;
+                if (now < actionAt || now - actionAt > 1800)
+                {
+                    LastPlayerMeleeActionAtById.Remove(id);
+                    continue;
+                }
+
+                CachedRosterRecord tracked = RosterRecordsByPedHandle.Values.FirstOrDefault(cached =>
+                    cached != null && cached.Record != null && cached.Ped != null &&
+                    string.Equals(GetMember(cached.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase));
+                if (tracked == null || tracked.Ped == null || !tracked.Ped.Exists() || tracked.Ped.IsDead ||
+                    IsExiledRosterRecord(tracked.Record))
+                    continue;
+
+                try
+                {
+                    if (tracked.Ped.Position.DistanceTo(player.Position) > 4.0f)
+                        continue;
+
+                    // PED::_HAS_PED_BEEN_SHOVED_RECENTLY(Ped, ms).
+                    bool shoved = Function.Call<bool>(0x29FCE825613FEFCAUL,
+                        new InputArgument[] { tracked.Ped.Handle, 1400 });
+                    if (!shoved)
+                        continue;
+
+                    ApplyNaturalAffinityChange(tracked.Record, id, "physical", "empujón", -5, 2500);
+                    LastPlayerMeleeActionAtById.Remove(id);
+                }
+                catch (Exception ex)
+                {
+                    Log("Natural shove affinity check warning: " + Unwrap(ex));
+                }
+            }
+        }
+
+        private static void ApplyNaturalAffinityChange(object record, string id, string actionKey,
+            string reason, int delta, int cooldownMs)
+        {
+            if (!_enableAffinity || record == null || string.IsNullOrWhiteSpace(id) || delta == 0)
+                return;
+
+            string key = id + "|" + actionKey;
+            int now = Game.GameTime;
+            int previous;
+            if (LastNaturalAffinityActionAt.TryGetValue(key, out previous) &&
+                now >= previous && now - previous < cooldownMs)
+                return;
+
+            LastNaturalAffinityActionAt[key] = now;
+            int affinity = ChangeAffinity(record, delta);
+            if (affinity >= 0)
+                Log("Affinity " + (delta > 0 ? "+" : "") + delta + " (" + reason + ") for " +
+                    ((GetMember(record, "Name") as string) ?? id) + "; now " + affinity + "/100.");
         }
 
         private static void MaintainAffinityTravel(object instance, Ped player)
@@ -1061,17 +1155,6 @@ namespace EnRAGECompanionsExtension
                 if (!activeIds.Contains(id)) AffinityTravelTrackers.Remove(id);
         }
 
-        private static void AdjustAffinityFromRoster(object instance, object record, int delta)
-        {
-            int affinity = ChangeAffinity(record, delta);
-            if (affinity < 0)
-            {
-                InvokeInstance(instance, "ShowSubtitle", "La afinidad está desactivada en el archivo INI.");
-                return;
-            }
-            string name = GetMember(record, "Name") as string ?? T("companion.default");
-            InvokeInstance(instance, "ShowSubtitle", TF("affinity.status", name, affinity));
-        }
         private static void DetailActionsPostfix(object __instance, ref List<string> __result)
         {
             try
@@ -1087,14 +1170,6 @@ namespace EnRAGECompanionsExtension
 
                 string call = T("action.call"), kick = T("action.kick");
                 string confirm = T("action.kick.confirm"), cancel = T("action.kick.cancel");
-                if (IsRosterRecordIncapacitated(record))
-                {
-                    __result.RemoveAll(action => action != null && action != "Atrás" && action != "Back" && action != "Volver" && action != "Cerrar" && action != "Close");
-                    if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
-                        string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
-                        _pendingKickRosterRecordId = null;
-                    return;
-                }
                 if (ExiledRosterIds.Contains(id))
                 {
                     __result.Remove("Llamarlo"); __result.Remove(call);
@@ -1170,7 +1245,7 @@ namespace EnRAGECompanionsExtension
                 if (string.Equals(id, _pendingKickRosterRecordId, StringComparison.OrdinalIgnoreCase))
                 {
                     _pendingKickRosterRecordId = null;
-                    InvokeInstance(_latestMainInstance, "ShowSubtitle", "Expulsión cancelada.");
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.kick.cancelled"));
                 }
             }
             catch (Exception ex) { Log("Roster confirmation navigation warning: " + Unwrap(ex)); }
@@ -1189,12 +1264,6 @@ namespace EnRAGECompanionsExtension
                 string recordIdForConfirmation = GetMember(record, "Id") as string;
                 bool navigationAction = action == "Atrás" || action == "Back" || action == "Volver" ||
                     action == "Cerrar" || action == "Close";
-                if (IsRosterRecordIncapacitated(record) && !navigationAction)
-                {
-                    _pendingKickRosterRecordId = null;
-                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("incapacitated.only_help"));
-                    return false;
-                }
                 if (!string.IsNullOrWhiteSpace(_pendingKickRosterRecordId) &&
                     string.Equals(_pendingKickRosterRecordId, recordIdForConfirmation, StringComparison.OrdinalIgnoreCase) &&
                     action != T("action.kick.confirm") && action != T("action.kick.cancel") && action != T("action.kick"))
@@ -1211,7 +1280,7 @@ namespace EnRAGECompanionsExtension
                 {
                     if (alreadyFollowing)
                     {
-                        InvokeInstance(_latestMainInstance, "ShowSubtitle", "Ese miembro ya te está siguiendo.");
+                        InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.already_following"));
                         return false;
                     }
                     CallRecruitedRosterMember(_latestMainInstance, __instance, record);
@@ -1221,7 +1290,7 @@ namespace EnRAGECompanionsExtension
                     return true;
                 if (anyCompanionFollowing && (action == T("action.kick") || action == T("action.kick.confirm")))
                 {
-                    InvokeInstance(_latestMainInstance, "ShowSubtitle", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero.");
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.cannot_kick_following"));
                     return false;
                 }
 
@@ -1240,7 +1309,7 @@ namespace EnRAGECompanionsExtension
                 {
                     if (!string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                     {
-                        InvokeInstance(_latestMainInstance, "ShowSubtitle", "La confirmación ya no es válida. Vuelve a seleccionar la expulsión.");
+                        InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.kick.invalid"));
                         return false;
                     }
                     ExpelRosterMember(_latestMainInstance, record);
@@ -1253,7 +1322,7 @@ namespace EnRAGECompanionsExtension
                 {
                     _pendingKickRosterRecordId = null;
                     SetField(__instance, "_action", 0);
-                    InvokeInstance(_latestMainInstance, "ShowSubtitle", "Expulsión cancelada.");
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.kick.cancelled"));
                     return false;
                 }
             }
@@ -1321,9 +1390,12 @@ namespace EnRAGECompanionsExtension
         {
             if (record == null) return false;
             string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id)) return false;
+            if (string.IsNullOrWhiteSpace(id) ||
+                string.IsNullOrWhiteSpace(GetMember(record, "Gang") as string))
+                return false;
             if (RecruitedRosterModels.ContainsKey(id)) return true;
             // Records created by this extension have a stable prefix and retain ModelHash in enRAGE's save.
+            // A former recruit whose Gang was cleared after escape is no longer an active recruit.
             return (id.StartsWith("extcomp_", StringComparison.OrdinalIgnoreCase) ||
                     id.StartsWith("extvdl_", StringComparison.OrdinalIgnoreCase)) &&
                    ConvertToUInt32(GetMember(record, "ModelHash")) != 0U;
@@ -1391,7 +1463,7 @@ namespace EnRAGECompanionsExtension
             }
             if (GetMember(record, "IsAlive") is bool alive && !alive)
             {
-                InvokeInstance(instance, "ShowSubtitle", "No puedes curar a un miembro fallecido del roster.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.dead"));
                 return;
             }
 
@@ -1399,12 +1471,12 @@ namespace EnRAGECompanionsExtension
             // and do not silently heal a different pedestrian that happens to share the same model.
             CachedRosterRecord targetedCache;
             if (targetedPed == null || !targetedPed.Exists() ||
-                (targetedPed.IsDead && !IsPedIncapacitatedRecruit(targetedPed)) ||
+                targetedPed.IsDead ||
                 !RosterRecordsByPedHandle.TryGetValue(targetedPed.Handle, out targetedCache) ||
                 targetedCache == null || targetedCache.Record == null ||
                 !string.Equals(GetMember(targetedCache.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
             {
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo identificar al recluta apuntado; no se cobró el remedio.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.target.invalid"));
                 return;
             }
 
@@ -1425,7 +1497,7 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex)
             {
                 Log("Medicine cash balance read failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo comprobar el dinero disponible.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.cash.check_failed"));
                 return;
             }
             if (cash < _recruitMedicineCostCents)
@@ -1440,7 +1512,7 @@ namespace EnRAGECompanionsExtension
             if (LastMedicineTransactionAt.TryGetValue(id, out lastTransaction) &&
                 now >= lastTransaction && now - lastTransaction < 2000)
             {
-                InvokeInstance(instance, "ShowSubtitle", "El remedio ya se está procesando; no se cobró otra vez.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.processing"));
                 return;
             }
             // Claim this record before debiting cash. If a duplicate prompt fires while the native
@@ -1450,7 +1522,7 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex)
             {
                 Log("Medicine payment failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo confirmar el cobro; espera un momento antes de volver a intentarlo.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.charge_failed"));
                 return;
             }
 
@@ -1461,8 +1533,8 @@ namespace EnRAGECompanionsExtension
             {
                 bool refunded = TryRefundMedicineCharge(_recruitMedicineCostCents);
                 InvokeInstance(instance, "ShowSubtitle", refunded
-                    ? "El remedio no pudo aplicarse; se devolvió el cobro."
-                    : "El remedio no pudo aplicarse y no se pudo confirmar la devolución. Revisa el registro del mod.");
+                    ? T("medicine.failed_refunded")
+                    : T("medicine.failed_refund_failed"));
                 if (!refunded)
                     Log("CRITICAL: medicine treatment failed and refund could not be confirmed for " + id + ".");
                 return;
@@ -1473,7 +1545,7 @@ namespace EnRAGECompanionsExtension
             {
                 injuryState.Injury.RecoverySecondsRemaining = Math.Max(0,
                     injuryState.Injury.RecoverySecondsRemaining - _medicineRecoveryReductionSeconds);
-                if (injuryState.Injury.RecoverySecondsRemaining <= 0 && !injuryState.Injury.IsIncapacitated)
+                if (injuryState.Injury.RecoverySecondsRemaining <= 0)
                 {
                     injuryState.Injury.IsInjured = false;
                     injuryState.Injury.Severity = 0;
@@ -1566,7 +1638,7 @@ namespace EnRAGECompanionsExtension
 
         private static void HealPedToMaximum(Ped ped)
         {
-            if (ped == null || !ped.Exists() || (ped.IsDead && !ped.IsIncapacitated)) return;
+            if (ped == null || !ped.Exists() || ped.IsDead) return;
             int maxHealth = ped.MaxHealth;
             if (maxHealth > 0) ped.Health = maxHealth;
         }
@@ -1630,7 +1702,6 @@ namespace EnRAGECompanionsExtension
 
             ExiledRosterIds.Add(id);
             HideIndividualOrderPrompts();
-            HideIncapacitatedPrompt();
             HideRecruitMedicinePrompt();
             HideCombatStancePrompt();
             SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
@@ -1677,7 +1748,7 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex)
             {
                 Log("Expelling roster member failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo completar la expulsión. Revisa el registro de la extensión.");
+                InvokeInstance(instance, "ShowSubtitle", T("kick.failed"));
             }
         }
 
@@ -1757,7 +1828,7 @@ namespace EnRAGECompanionsExtension
             if (modelHash == 0U) modelHash = ConvertToUInt32(GetMember(record, "ModelHash"));
             if (modelHash == 0U)
             {
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo recuperar el modelo de este miembro.");
+                InvokeInstance(instance, "ShowSubtitle", T("roster.model_missing"));
                 return;
             }
             if (GetMember(record, "IsAlive") is bool isAlive && !isAlive)
@@ -1780,7 +1851,7 @@ namespace EnRAGECompanionsExtension
             }
             if (CountActiveCompanions(instance) >= _maxCompanions)
             {
-                InvokeInstance(instance, "ShowSubtitle", "No puedes llevar más compañeros ahora.");
+                InvokeInstance(instance, "ShowSubtitle", T("recruit.limit"));
                 return;
             }
 
@@ -2186,7 +2257,7 @@ namespace EnRAGECompanionsExtension
                 _preferredGenericPed = null;
                 if (candidate == null && !hasPreferredTarget)
                     candidate = FindCandidate(instance, player);
-                if (candidate == null || !candidate.Exists() || IsPedIncapacitatedRecruit(candidate))
+                if (candidate == null || !candidate.Exists())
                 {
                     HideGenericRecruitPrompt();
                     return;
@@ -2244,549 +2315,13 @@ namespace EnRAGECompanionsExtension
             }
         }
 
-        // While aiming at an active extension companion, expose the individual orders as world
-        // prompts. These are deliberately separate from the roster sheet and from Dejar de seguirme.
-        private static bool IsActiveExtensionRecruitTarget(object instance, object record, Ped target)
-        {
-            if (instance == null || record == null || target == null || !target.Exists() ||
-                IsExiledRosterRecord(record) ||
-                !(GetMember(record, "IsAlive") is bool alive) || !alive)
-                return false;
 
-            string id = GetMember(record, "Id") as string;
-            object companion = FindActiveExtensionCompanion(instance, id);
-            if (companion == null) return false;
-            string key = GetField(companion, "Key") as string;
-            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
-                GetFieldInt(companion, "State", 2) == 2)
-                return false;
 
-            CompanionPersistentState persistent = GetPersistentState(record, false);
-            if (persistent != null && persistent.FollowState == CompanionFollowState.Dismissed)
-                return false;
 
-            Ped activePed = GetField(companion, "Ped") as Ped;
-            if (activePed == null || !activePed.Exists()) activePed = GetField(companion, "Real") as Ped;
-            return activePed != null && activePed.Exists() && activePed.Handle == target.Handle;
-        }
 
-        private static void UpdateIndividualOrderPrompts(object instance, Ped player)
-        {
-            try
-            {
-                if (!_enableIndividualOrders || player == null || !player.Exists() || player.IsInCombat)
-                {
-                    HideIndividualOrderPrompts();
-                    return;
-                }
-                Ped target = FindAimedRecruitedPed(instance, player);
-                CachedRosterRecord cached;
-                if (target == null || !target.Exists() || !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) ||
-                    cached == null || cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
-                    !IsActiveExtensionRecruitTarget(instance, cached.Record, target))
-                {
-                    HideIndividualOrderPrompts();
-                    return;
-                }
 
-                CompanionPersistentState state = GetPersistentState(cached.Record, true);
-                if (IsPedIncapacitatedRecruit(target) || (state != null && state.Injury != null && state.Injury.IsIncapacitated))
-                {
-                    HideIndividualOrderPrompts();
-                    return;
-                }
-                CompanionFollowState current = state == null ? CompanionFollowState.Following : state.FollowState;
-                CompanionFollowState next = current == CompanionFollowState.Following ? CompanionFollowState.Waiting : CompanionFollowState.Following;
-                string label = next == CompanionFollowState.Waiting ? T("order.wait_label") : T("order.follow_label");
-                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
-                UpdateIndividualOrderPrompt(instance, target, group, label, IndividualOrderPromptControl, next, cached.Record);
-            }
-            catch (Exception ex)
-            {
-                HideIndividualOrderPrompts();
-                Log("Individual order prompt failed: " + Unwrap(ex));
-            }
-        }
-        private static void UpdateIndividualOrderPrompt(object instance, Ped target, int group, string label,
-            int control, CompanionFollowState order, object record)
-        {
-            int prompt = _individualOrderPrompt;
-            if (prompt == 0 || _individualOrderPromptFor != target.Handle || _individualOrderPromptGroup != group ||
-                !IsPromptValid(prompt) || !string.Equals(_individualOrderPromptLabel, label, StringComparison.Ordinal))
-            {
-                HideIndividualOrderPrompt();
-                object controlArg = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, control);
-                prompt = Convert.ToInt32(_makePrompt.Invoke(null, new object[] { controlArg, label, true, group }));
-                _individualOrderPromptFor = target.Handle;
-                _individualOrderPromptGroup = group;
-                _individualOrderPromptArmed = false;
-                _individualOrderPromptLabel = label;
-            }
-            _individualOrderPromptPed = target;
-            if (prompt == 0) return;
-            HUD._UI_PROMPT_SET_VISIBLE(prompt, true);
-            HUD._UI_PROMPT_SET_ENABLED(prompt, true);
-            if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(prompt))
-            {
-                _individualOrderPromptArmed = true;
-                return;
-            }
-            if (!_individualOrderPromptArmed) return;
-            Ped selected = _individualOrderPromptPed;
-            _individualOrderPromptArmed = false;
-            if (selected != null && selected.Exists() && selected.Handle == target.Handle)
-                SetIndividualCompanionOrder(instance, record, order);
-        }
-        private static void HideIndividualOrderPrompt()
-        {
-            int prompt = _individualOrderPrompt;
-            if (prompt != 0 && IsPromptValid(prompt))
-                try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
-            _individualOrderPrompt = 0;
-            _individualOrderPromptFor = 0;
-            _individualOrderPromptGroup = 0;
-            _individualOrderPromptArmed = false;
-            _individualOrderPromptPed = null;
-            _individualOrderPromptLabel = null;
-        }
-        private static void HideIndividualOrderPrompts()
-        {
-            HideIndividualOrderPrompt();
-        }
 
-        private static void UpdateIncapacitatedPrompt(object instance, Ped player)
-        {
-            try
-            {
-                if (player == null || !player.Exists())
-                {
-                    HideIncapacitatedPrompt();
-                    return;
-                }
 
-                Ped target = FindAimedRecruitedPed(instance, player);
-                CachedRosterRecord cached;
-                if (target == null || !target.Exists() ||
-                    !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
-                    cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
-                    IsExiledRosterRecord(cached.Record) ||
-                    (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive))
-                {
-                    HideIncapacitatedPrompt();
-                    return;
-                }
-
-                CompanionPersistentState state = GetPersistentState(cached.Record, true);
-                string targetId = GetMember(cached.Record, "Id") as string;
-                int recoveryUntil;
-                if (!string.IsNullOrWhiteSpace(targetId) &&
-                    RecoveryAnimationUntilById.TryGetValue(targetId, out recoveryUntil) &&
-                    Game.GameTime < recoveryUntil)
-                {
-                    HideIncapacitatedPrompt();
-                    return;
-                }
-                bool down = IsNativeWoundedDown(instance, target) ||
-                    (state != null && state.Injury != null && state.Injury.IsIncapacitated && !target.IsDead);
-                if (!down)
-                {
-                    HideIncapacitatedPrompt();
-                    return;
-                }
-
-                HideIndividualOrderPrompts();
-                HideRecruitMedicinePrompt();
-                HideCombatStancePrompt();
-
-                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
-                if (_incapacitatedPrompt == 0 || _incapacitatedPromptFor != target.Handle ||
-                    _incapacitatedPromptGroup != group || !IsPromptValid(_incapacitatedPrompt))
-                {
-                    HideIncapacitatedPrompt();
-                    object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, IncapacitatedPromptControl);
-                    _incapacitatedPrompt = Convert.ToInt32(_makePrompt.Invoke(null,
-                        new object[] { control, T("incapacitated.prompt"), true, group }));
-                    _incapacitatedPromptFor = target.Handle;
-                    _incapacitatedPromptGroup = group;
-                    _incapacitatedPromptArmed = false;
-                    _incapacitatedPromptPed = target;
-                }
-                else
-                {
-                    _incapacitatedPromptPed = target;
-                }
-
-                if (_incapacitatedPrompt == 0) return;
-                HUD._UI_PROMPT_SET_VISIBLE(_incapacitatedPrompt, true);
-                HUD._UI_PROMPT_SET_ENABLED(_incapacitatedPrompt, true);
-                if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(_incapacitatedPrompt))
-                {
-                    _incapacitatedPromptArmed = true;
-                    return;
-                }
-                if (!_incapacitatedPromptArmed) return;
-
-                Ped selected = _incapacitatedPromptPed;
-                _incapacitatedPromptArmed = false;
-                HideIncapacitatedPrompt();
-                if (selected != null && selected.Exists() && selected.Handle == target.Handle)
-                    HelpIncapacitatedCompanion(instance, cached.Record, selected, player);
-            }
-            catch (Exception ex)
-            {
-                HideIncapacitatedPrompt();
-                Log("Incapacitated companion prompt failed: " + Unwrap(ex));
-            }
-        }
-
-        private static void HideIncapacitatedPrompt()
-        {
-            int prompt = _incapacitatedPrompt;
-            if (prompt != 0 && IsPromptValid(prompt))
-                try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
-            _incapacitatedPrompt = 0;
-            _incapacitatedPromptFor = 0;
-            _incapacitatedPromptGroup = 0;
-            _incapacitatedPromptArmed = false;
-            _incapacitatedPromptPed = null;
-        }
-
-        private static bool HelpIncapacitatedCompanion(object instance, object record, Ped ped, Ped helperPed)
-        {
-            if (instance == null || record == null || ped == null || !ped.Exists() ||
-                helperPed == null || !helperPed.Exists() || helperPed.Handle == ped.Handle ||
-                IsExiledRosterRecord(record) ||
-                (GetMember(record, "IsAlive") is bool alive && !alive))
-                return false;
-
-            CompanionPersistentState state = GetPersistentState(record, false);
-            bool persistentlyDown = state != null && state.Injury != null && state.Injury.IsIncapacitated;
-            bool nativeWoundedDown = IsNativeWoundedDown(instance, ped);
-            if (!nativeWoundedDown && !(persistentlyDown && !ped.IsDead))
-                return false;
-
-            string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id)) return false;
-
-            // Invoke the paired native only for enRAGE's actual wounded-down state. For
-            // extension-simulated incapacitation, use a stand-up task instead. Never call
-            // RESURRECT_PED: an ordinary death must not be brought back.
-            bool nativeStarted = nativeWoundedDown &&
-                TryInvokeNativeWrapper(typeof(PED), "_INCAPACITATED_REVIVE",
-                    new object[] { ped.Handle, helperPed.Handle });
-            if (!nativeStarted)
-            {
-                if (ped.IsDead)
-                {
-                    InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
-                    Log("Native incapacitated revive unavailable for " + id + "; did not resurrect dead ped.");
-                    return false;
-                }
-
-                bool stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true });
-                if (!stood) stood = TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle });
-                if (!stood)
-                {
-                    InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
-                    return false;
-                }
-            }
-
-            int maxHealth = 0;
-            try { maxHealth = ped.MaxHealth; } catch { }
-            if (maxHealth <= 0) maxHealth = 100;
-            int recoveryHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
-            if (!ped.IsDead)
-            {
-                try
-                {
-                    if (ped.Health < recoveryHealth) ped.Health = recoveryHealth;
-                    if (!ped.Exists() || ped.IsDead || ped.Health <= 0)
-                    {
-                        InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
-                        return false;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log("Could not restore health while helping incapacitated companion: " + Unwrap(ex));
-                    return false;
-                }
-            }
-            else
-            {
-                // The paired native can complete asynchronously while the wrapper still reports
-                // IsDead. Protect this short transition from death cleanup and movement-order tasks.
-                RecoveryAnimationUntilById[id] = Game.GameTime + 3000;
-                LastAutoAssistAtById[id] = Game.GameTime + 8000;
-                object helperRecordPending = GetTrackedRecord(instance, helperPed.Handle);
-                string helperPendingId = GetMember(helperRecordPending, "Id") as string;
-                if (!string.IsNullOrWhiteSpace(helperPendingId))
-                    RecoveryAnimationUntilById[helperPendingId] = Game.GameTime + 2200;
-                return true;
-            }
-
-            try
-            {
-                if (!nativeStarted)
-                {
-                    if (!TryInvokeTaskNative("TASK_STAND_UP", new object[] { ped.Handle, true }))
-                        TryInvokeTaskNative("TASK_STAND_STILL", new object[] { ped.Handle, 900 });
-                }
-            }
-            catch { }
-
-            if (state == null) state = GetPersistentState(record, true);
-            if (state != null && state.Injury != null)
-            {
-                state.Injury.IsIncapacitated = false;
-                state.Injury.IncapacitatedSinceUtcTicks = 0;
-                state.Injury.IsInjured = state.Injury.Severity > 0 || state.Injury.RecoverySecondsRemaining > 0;
-                SavePersistentState(state);
-            }
-            SetMember(record, "IsAlive", true);
-            SetMember(record, "PresumedDead", false);
-
-            object companion = FindActiveExtensionCompanion(instance, id);
-            if (companion != null && state != null && state.FollowState == CompanionFollowState.Following)
-            {
-                SetField(companion, "State", 0);
-                SetField(companion, "AskedAt", Game.GameTime);
-            }
-            LastObservedHealthById[id] = ped.Health;
-            LastDamageBaselineById[id] = ped.Health;
-            LastHealthSampleAtById[id] = Game.GameTime;
-            LastDamageAtById.Remove(id);
-            LastInjuryRecoveryAtById[id] = Game.GameTime;
-            RecoveryAnimationUntilById[id] = Game.GameTime + 2200;
-            LastAutoAssistAtById[id] = Game.GameTime + 8000;
-
-            object helperRecord = GetTrackedRecord(instance, helperPed.Handle);
-            string helperId = GetMember(helperRecord, "Id") as string;
-            if (!string.IsNullOrWhiteSpace(helperId))
-                RecoveryAnimationUntilById[helperId] = Game.GameTime + 2200;
-
-            try { InvokeInstance(instance, "SaveRoster"); } catch { }
-            InvokeInstance(instance, "ShowSubtitle", TF("incapacitated.helped", GetMember(record, "Name") as string ?? T("companion.default")));
-            return true;
-        }
-
-        private static void TryAutoAssistIncapacitatedCompanions(object instance, Ped player, object[] companions)
-        {
-            if (instance == null || player == null || !player.Exists() || player.IsInCombat || companions == null ||
-                companions.Length == 0)
-                return;
-
-            // The entire active group must be out of combat before companions attempt medical aid.
-            foreach (object companion in companions)
-            {
-                string key = GetField(companion, "Key") as string;
-                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
-                    GetFieldInt(companion, "State", 2) == 2)
-                    continue;
-                Ped memberPed = GetField(companion, "Ped") as Ped;
-                if (memberPed == null || !memberPed.Exists()) memberPed = GetField(companion, "Real") as Ped;
-                if (memberPed != null && memberPed.Exists() && !memberPed.IsDead && memberPed.IsInCombat)
-                    return;
-            }
-
-            int now = Game.GameTime;
-            foreach (object downedCompanion in companions)
-            {
-                string key = GetField(downedCompanion, "Key") as string;
-                if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
-                    continue;
-                object record = GetField(downedCompanion, "Rec");
-                if (record == null || IsExiledRosterRecord(record) ||
-                    !(GetMember(record, "IsAlive") is bool alive) || !alive)
-                    continue;
-
-                Ped target = GetField(downedCompanion, "Ped") as Ped;
-                if (target == null || !target.Exists()) target = GetField(downedCompanion, "Real") as Ped;
-                if (target == null || !target.Exists()) continue;
-
-                CompanionPersistentState targetState = GetPersistentState(record, false);
-                bool downed = IsNativeWoundedDown(instance, target) ||
-                    (targetState != null && targetState.Injury != null &&
-                     targetState.Injury.IsIncapacitated && !target.IsDead);
-                if (!downed) continue;
-
-                string id = GetMember(record, "Id") as string;
-                if (string.IsNullOrWhiteSpace(id)) continue;
-                if (AutoAssistTargetByHelperId.Values.Any(targetId =>
-                    string.Equals(targetId, id, StringComparison.OrdinalIgnoreCase)))
-                    continue;
-                int nextAllowed;
-                if (LastAutoAssistAtById.TryGetValue(id, out nextAllowed) && now < nextAllowed) continue;
-
-                object bestHelper = null;
-                Ped bestHelperPed = null;
-                float bestDistance = 12.0f;
-                foreach (object candidate in companions)
-                {
-                    if (object.ReferenceEquals(candidate, downedCompanion)) continue;
-                    string helperKey = GetField(candidate, "Key") as string;
-                    if (string.IsNullOrWhiteSpace(helperKey) || !helperKey.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
-                        GetFieldInt(candidate, "State", 2) == 2)
-                        continue;
-                    object helperRecord = GetField(candidate, "Rec");
-                    string helperId = GetMember(helperRecord, "Id") as string;
-                    if (string.IsNullOrWhiteSpace(helperId) || AutoAssistTargetByHelperId.ContainsKey(helperId) ||
-                        helperRecord == null || IsExiledRosterRecord(helperRecord) ||
-                        !(GetMember(helperRecord, "IsAlive") is bool helperAlive) || !helperAlive)
-                        continue;
-                    Ped helper = GetField(candidate, "Ped") as Ped;
-                    if (helper == null || !helper.Exists()) helper = GetField(candidate, "Real") as Ped;
-                    if (helper == null || !helper.Exists() || helper.IsDead || helper.IsInCombat || helper.IsOnMount ||
-                        IsNativeWoundedDown(instance, helper) || IsRosterRecordIncapacitated(helperRecord))
-                        continue;
-                    float distance;
-                    try { distance = target.Position.DistanceTo(helper.Position); }
-                    catch { continue; }
-                    if (distance <= bestDistance)
-                    {
-                        bestDistance = distance;
-                        bestHelper = candidate;
-                        bestHelperPed = helper;
-                    }
-                }
-
-                if (bestHelperPed == null) continue;
-                LastAutoAssistAtById[id] = now + 10000;
-                string selectedHelperId = GetMember(GetField(bestHelper, "Rec"), "Id") as string;
-                if (bestDistance <= 2.35f)
-                {
-                    if (HelpIncapacitatedCompanion(instance, record, target, bestHelperPed))
-                        Log("Nearby recruit started wound assistance for " + id + " using " +
-                            (selectedHelperId ?? "another recruit") + ".");
-                }
-                else if (!string.IsNullOrWhiteSpace(selectedHelperId))
-                {
-                    AutoAssistTargetByHelperId[selectedHelperId] = id;
-                    LastAutoAssistMoveAtByHelperId.Remove(selectedHelperId);
-                    // If the helper is interrupted/cannot path, retry with another active recruit soon.
-                    LastAutoAssistAtById[id] = now + 2500;
-                    Log("Recruit " + selectedHelperId + " is approaching injured companion " + id + ".");
-                }
-            }
-        }
-
-        private static void UpdateCombatStancePrompt(object instance, Ped player)
-        {
-            try
-            {
-                if (!_enableIndividualOrders || player == null || !player.Exists())
-                {
-                    HideCombatStancePrompt();
-                    return;
-                }
-
-                Ped target = FindAimedRecruitedPed(instance, player);
-                CachedRosterRecord cached;
-                if (target == null || !target.Exists() ||
-                    !RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
-                    cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
-                    IsExiledRosterRecord(cached.Record) ||
-                    !IsRosterRecordCurrentlyFollowing(instance, cached.Record))
-                {
-                    HideCombatStancePrompt();
-                    return;
-                }
-
-                if (IsPedIncapacitatedRecruit(target) || FindAttackerTarget(instance, target, player) == null)
-                {
-                    HideCombatStancePrompt();
-                    return;
-                }
-
-                CompanionPersistentState state = GetPersistentState(cached.Record, true);
-                if (state == null) { HideCombatStancePrompt(); return; }
-                string label = TF("stance.prefix", CombatStanceLabel(state.CombatStance));
-                int group = HUD._UI_PROMPT_GET_GROUP_ID_FOR_TARGET_ENTITY(target.Handle);
-                if (_combatStancePrompt == 0 || _combatStancePromptFor != target.Handle ||
-                    _combatStancePromptGroup != group || !IsPromptValid(_combatStancePrompt) ||
-                    !string.Equals(_combatStancePromptLabel, label, StringComparison.Ordinal))
-                {
-                    HideCombatStancePrompt();
-                    object control = PromptControlArgument(_makePrompt.GetParameters()[0].ParameterType, CombatStancePromptControl);
-                    _combatStancePrompt = Convert.ToInt32(_makePrompt.Invoke(null,
-                        new object[] { control, label, true, group }));
-                    _combatStancePromptFor = target.Handle;
-                    _combatStancePromptGroup = group;
-                    _combatStancePromptLabel = label;
-                    _combatStancePromptArmed = false;
-                    _combatStancePromptPed = target;
-                }
-                else
-                {
-                    _combatStancePromptPed = target;
-                }
-
-                if (_combatStancePrompt == 0) return;
-                HUD._UI_PROMPT_SET_VISIBLE(_combatStancePrompt, true);
-                HUD._UI_PROMPT_SET_ENABLED(_combatStancePrompt, true);
-                if (!HUD._UI_PROMPT_HAS_HOLD_MODE_COMPLETED(_combatStancePrompt))
-                {
-                    _combatStancePromptArmed = true;
-                    return;
-                }
-                if (!_combatStancePromptArmed) return;
-
-                _combatStancePromptArmed = false;
-                Ped selected = _combatStancePromptPed;
-                HideCombatStancePrompt();
-                if (selected != null && selected.Exists() && selected.Handle == target.Handle)
-                    AdvanceCombatStance(instance, cached.Record, selected);
-            }
-            catch (Exception ex)
-            {
-                HideCombatStancePrompt();
-                Log("Combat stance prompt failed: " + Unwrap(ex));
-            }
-        }
-        private static string CombatStanceLabel(CompanionCombatStance stance)
-        {
-            switch (stance)
-            {
-                case CompanionCombatStance.HoldPosition: return T("stance.hold");
-                case CompanionCombatStance.CoverPlayer: return T("stance.cover");
-                case CompanionCombatStance.DefendArea: return T("stance.defend");
-                case CompanionCombatStance.FireOnSignal: return T("stance.fire");
-                default: return T("stance.follow");
-            }
-        }
-
-        private static void AdvanceCombatStance(object instance, object record, Ped ped)
-        {
-            CompanionPersistentState state = GetPersistentState(record, true);
-            if (state == null || ped == null || !ped.Exists()) return;
-            int next = ((int)state.CombatStance + 1) % 5;
-            state.CombatStance = (CompanionCombatStance)next;
-            if (state.CombatStance == CompanionCombatStance.DefendArea)
-            {
-                var pos = ped.Position;
-                state.SavedPosition.HasValue = true;
-                state.SavedPosition.X = pos.X;
-                state.SavedPosition.Y = pos.Y;
-                state.SavedPosition.Z = pos.Z;
-                try { state.SavedPosition.Heading = ped.Heading; } catch { state.SavedPosition.Heading = 0f; }
-            }
-            SavePersistentState(state);
-            InvokeInstance(instance, "ShowSubtitle", TF("stance.changed", GetMember(record, "Name") as string ?? T("companion.default"), CombatStanceLabel(state.CombatStance)));
-        }
-
-        private static void HideCombatStancePrompt()
-        {
-            int prompt = _combatStancePrompt;
-            if (prompt != 0 && IsPromptValid(prompt))
-                try { HUD._UI_PROMPT_DELETE(prompt); } catch { }
-            _combatStancePrompt = 0;
-            _combatStancePromptFor = 0;
-            _combatStancePromptGroup = 0;
-            _combatStancePromptArmed = false;
-            _combatStancePromptPed = null;
-            _combatStancePromptLabel = null;
-        }
 
         // Shows a contextual treatment prompt when the player is actively aiming at one of the
         // extension's living recruits. The prompt is attached to the target's own prompt group.
@@ -2804,7 +2339,7 @@ namespace EnRAGECompanionsExtension
                 CachedRosterRecord cached;
                 if (!RosterRecordsByPedHandle.TryGetValue(target.Handle, out cached) || cached == null ||
                     cached.Record == null || !IsRecruitedRosterRecord(cached.Record) ||
-                    IsExiledRosterRecord(cached.Record) || IsPedIncapacitatedRecruit(target))
+                    IsExiledRosterRecord(cached.Record) || target.IsDead)
                 {
                     HideRecruitMedicinePrompt();
                     return;
@@ -2969,13 +2504,8 @@ namespace EnRAGECompanionsExtension
                     return true;
 
                 object recruitedRecord = GetField(companion, "Rec");
-                if (IsRosterRecordIncapacitated(recruitedRecord))
-                {
-                    InvokeInstance(__instance, "ShowSubtitle", T("incapacitated.only_help"));
-                    return false;
-                }
-
                 string why = __args[1] as string;
+                bool quiet = __args[2] is bool quietValue && quietValue;
                 if (string.Equals(why, "back at camp", StringComparison.OrdinalIgnoreCase))
                 {
                     // Extension recruits do not have a real camp. Prevent Ride from treating the
@@ -2985,10 +2515,26 @@ namespace EnRAGECompanionsExtension
                     return false;
                 }
 
-                // Any attempt to send this extension-only companion to a story camp is instead a
-                // normal dismissal. The persistent roster record is deliberately retained.
-                DismissRecruitedCompanion(__instance, companion);
-                return false;
+                // The actual player dismissal is handled by AskPrefix. Quiet enRAGE lifecycle
+                // cleanup should also preserve the recruited roster entry.
+                if (quiet || string.Equals(why, "you sent him home", StringComparison.OrdinalIgnoreCase))
+                {
+                    DismissRecruitedCompanion(__instance, companion);
+                    return false;
+                }
+
+                // Other SendHome calls are enRAGE departures, not the player's normal dismissal.
+                // Remove faction membership first, then let enRAGE run its own HeadHome/Flee task.
+                UnregisterEscapedRosterMember(__instance, recruitedRecord);
+                Ped departingPed = GetField(companion, "Ped") as Ped;
+                if (departingPed == null || !departingPed.Exists())
+                    departingPed = GetField(companion, "Real") as Ped;
+                string departingId = GetMember(recruitedRecord, "Id") as string;
+                ForgetRecruitPedTracking(departingPed, departingId);
+                ModelHashes.Remove(key);
+                InvokeInstance(__instance, "ShowSubtitle",
+                    TF("companion.escaped", GetField(companion, "Name") as string ?? T("companion.default")));
+                return true;
             }
             catch (Exception ex)
             {
@@ -3008,7 +2554,7 @@ namespace EnRAGECompanionsExtension
                 // Apply the configured total limit to enRAGE's original story-companion path too.
                 if (CountActiveCompanions(__instance) >= _maxCompanions)
                 {
-                    InvokeInstance(__instance, "ShowSubtitle", "No puedes llevar más compañeros ahora.");
+                    InvokeInstance(__instance, "ShowSubtitle", T("recruit.limit"));
                     return false;
                 }
                 return true;
@@ -3019,11 +2565,6 @@ namespace EnRAGECompanionsExtension
                 object existingCompanion = FindCompanionByKey(__instance, key);
                 if (existingCompanion != null)
                 {
-                    if (IsRosterRecordIncapacitated(GetField(existingCompanion, "Rec")))
-                    {
-                        InvokeInstance(__instance, "ShowSubtitle", T("incapacitated.only_help"));
-                        return false;
-                    }
                     DismissRecruitedCompanion(__instance, existingCompanion);
                     return false;
                 }
@@ -3048,7 +2589,7 @@ namespace EnRAGECompanionsExtension
                 return;
             if (!IsMalePed(ped))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "Solo puedes reclutar NPC masculinos.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.male_only"));
                 return;
             }
             if (!IsConfiguredRecruitmentFactionAvailable())
@@ -3061,7 +2602,7 @@ namespace EnRAGECompanionsExtension
             IList comps = GetField(__instance, "_comps") as IList;
             if (comps == null || CountActiveCompanions(__instance) >= _maxCompanions || AlreadyCompanion(comps, ped.Handle))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "No puedes llevar más compañeros ahora.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.limit"));
                 return;
             }
 
@@ -3074,13 +2615,13 @@ namespace EnRAGECompanionsExtension
             if (RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cachedPedRecord) && cachedPedRecord != null && cachedPedRecord.Record != null &&
                 ExiledRosterIds.Contains(GetMember(cachedPedRecord.Record, "Id") as string))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "Este NPC fue expulsado permanentemente y no puede volver a ser reclutado.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.exiled"));
                 return;
             }
             string trackedRecordId = GetMember(trackedRecord, "Id") as string;
             if (!string.IsNullOrWhiteSpace(trackedRecordId) && ExiledRosterIds.Contains(trackedRecordId))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "Este NPC fue expulsado permanentemente y no puede volver a ser reclutado.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.exiled"));
                 return;
             }
             bool newlyCreatedRosterRecord = false;
@@ -3100,7 +2641,10 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(name))
                 name = FindRecordName(__instance, ped.Handle);
             if (string.IsNullOrWhiteSpace(name))
-                name = "Aliado " + (CountActiveCompanions(__instance) + 1);
+            {
+                Log("Recruitment skipped because enRAGE did not provide a name for ped " + ped.Handle + ".");
+                return;
+            }
 
             object companion = null;
             bool added = false;
@@ -3185,16 +2729,6 @@ namespace EnRAGECompanionsExtension
                 return true;
 
             object record = GetField(companion, "Rec");
-            CompanionPersistentState savedState = GetPersistentState(record, false);
-            if (savedState != null && savedState.Injury != null && savedState.Injury.IsIncapacitated)
-            {
-                // An incapacitated recruit keeps the same roster identity. Do not let enRAGE's
-                // missing/dead-ped recovery path spawn a fresh body and detach it from the band.
-                SetField(companion, "State", 0);
-                __result = false;
-                return false;
-            }
-
             Ped player = __args[1] as Ped;
             uint modelHash;
             if (player == null || !player.Exists() || !ModelHashes.TryGetValue(key, out modelHash))
@@ -3361,7 +2895,7 @@ namespace EnRAGECompanionsExtension
                 float dx = threat.Position.X - stanceState.SavedPosition.X;
                 float dy = threat.Position.Y - stanceState.SavedPosition.Y;
                 float dz = threat.Position.Z - stanceState.SavedPosition.Z;
-                float radius = Math.Max(10.0f, _waitRadius * 2.0f);
+                float radius = 16.0f;
                 if ((float)Math.Sqrt(dx * dx + dy * dy + dz * dz) > radius)
                     threat = null;
             }
@@ -4110,6 +3644,7 @@ namespace EnRAGECompanionsExtension
             return false;
         }
 
+
         private static void CacheRosterRecord(int handle, uint modelHash, object record, Ped ped)
         {
             if (record == null)
@@ -4125,7 +3660,7 @@ namespace EnRAGECompanionsExtension
                 ApplyPendingFullHealthIfNeeded(record, ped);
                 if (ped != null && ped.Exists() && !string.IsNullOrWhiteSpace(id))
                 {
-                    if (!LastObservedHealthById.ContainsKey(id))
+                        if (!LastObservedHealthById.ContainsKey(id))
                         LastObservedHealthById[id] = ped.Health;
                     if (!LastDamageBaselineById.ContainsKey(id))
                         LastDamageBaselineById[id] = ped.Health;
@@ -4141,48 +3676,13 @@ namespace EnRAGECompanionsExtension
             foreach (KeyValuePair<int, CachedRosterRecord> pair in RosterRecordsByPedHandle.ToArray())
             {
                 CachedRosterRecord cached = pair.Value;
-                if (cached == null || cached.Record == null || cached.Ped == null)
-                    continue;
+                if (cached == null || cached.Record == null || cached.Ped == null) continue;
                 try
                 {
                     Ped ped = cached.Ped;
-                    if (!ped.Exists() || IsExiledRosterRecord(cached.Record)) continue;
+                    if (!ped.Exists() || IsExiledRosterRecord(cached.Record) || !ped.IsDead) continue;
                     string id = GetMember(cached.Record, "Id") as string;
-                    if (!ped.IsDead && !ped.IsIncapacitated) continue;
-
-                    int health = 0;
-                    try { health = ped.Health; } catch { }
-                    int previousHealth;
-                    if (!string.IsNullOrWhiteSpace(id) &&
-                        LastObservedHealthById.TryGetValue(id, out previousHealth) && health < previousHealth)
-                        LastDamageAtById[id] = Game.GameTime;
-
-                    int recoveryUntil;
-                    if (!string.IsNullOrWhiteSpace(id) &&
-                        RecoveryAnimationUntilById.TryGetValue(id, out recoveryUntil) &&
-                        Game.GameTime < recoveryUntil)
-                        continue;
-
-                    // Only enRAGE's native WoundedDown state (or the extension's recent-hit
-                    // threshold for living peds) is recoverable. A generic dead ped stays dead.
-                    if (IsLikelyIncapacitated(instance, cached.Record, ped, id))
-                    {
-                        SetMember(cached.Record, "IsAlive", true);
-                        SetMember(cached.Record, "PresumedDead", false);
-                        TryEnterIncapacitated(instance, cached.Record, ped);
-                        continue;
-                    }
-
-                    if (!ped.IsDead) continue;
-                    CompanionPersistentState staleInjury = GetPersistentState(cached.Record, false);
-                    if (staleInjury != null && staleInjury.Injury != null && staleInjury.Injury.IsIncapacitated)
-                    {
-                        staleInjury.Injury.IsIncapacitated = false;
-                        staleInjury.Injury.IncapacitatedSinceUtcTicks = 0;
-                        SavePersistentState(staleInjury);
-                    }
-                    if (!(GetMember(cached.Record, "IsAlive") is bool alive) || !alive)
-                        continue;
+                    if (GetMember(cached.Record, "IsAlive") is bool alive && !alive) continue;
                     SetMember(cached.Record, "IsAlive", false);
                     SetMember(cached.Record, "PresumedDead", false);
                     AppliedPromptNames.Remove(pair.Key);
@@ -4192,15 +3692,14 @@ namespace EnRAGECompanionsExtension
                     {
                         LastObservedHealthById.Remove(id);
                         LastDamageBaselineById.Remove(id);
+                        LastHealthSampleAtById.Remove(id);
                     }
                     string zone = InvokeInstance(instance, "GetZoneName", ped.Position) as string;
-                    if (!string.IsNullOrWhiteSpace(zone))
-                        SetMember(cached.Record, "LastDefeatLocation", zone);
-                    Log("Marked recruited faction member dead: " +
-                        (GetMember(cached.Record, "Name") as string ?? pair.Key.ToString()) + ".");
+                    if (!string.IsNullOrWhiteSpace(zone)) SetMember(cached.Record, "LastDefeatLocation", zone);
+                    Log("Marked recruited faction member dead: " + (GetMember(cached.Record, "Name") as string ?? pair.Key.ToString()) + ".");
                     changed = true;
                 }
-                catch { /* A streamed-out or recycled entity handle is not enough evidence of death. */ }
+                catch { /* A streamed-out or recycled handle is not proof of death. */ }
             }
             if (changed)
             {
@@ -4208,6 +3707,7 @@ namespace EnRAGECompanionsExtension
                 catch (Exception ex) { Log("Saving dead recruited members failed: " + Unwrap(ex)); }
             }
         }
+
 
         private static uint ConvertToUInt32(object value)
         {
@@ -4302,43 +3802,28 @@ namespace EnRAGECompanionsExtension
             try
             {
                 IDictionary named = GetField(instance, "_named") as IDictionary;
-                if (named == null || !named.Contains(handle))
-                    return null;
-                return GetMember(named[handle], "Name") as string;
-            }
-            catch { return null; }
-        }
-
-        private static string UniqueRosterName(object instance, string preferredName)
-        {
-            if (!string.IsNullOrWhiteSpace(preferredName) && !RosterNameExists(instance, preferredName))
-                return preferredName;
-
-            for (int i = 1; i <= 9999; i++)
-            {
-                string candidate = "Aliado " + i;
-                if (!RosterNameExists(instance, candidate))
-                    return candidate;
-            }
-            return "Aliado " + Guid.NewGuid().ToString("N").Substring(0, 6);
-        }
-
-        private static bool RosterNameExists(object instance, string name)
-        {
-            foreach (string collectionName in new[] { "Roster", "StoryRoster" })
-            {
-                IEnumerable records = GetMember(instance, collectionName) as IEnumerable;
-                if (records == null)
-                    continue;
-                foreach (object record in records)
+                if (named != null && named.Contains(handle))
                 {
-                    string existingName = GetMember(record, "Name") as string;
-                    if (string.Equals(existingName, name, StringComparison.OrdinalIgnoreCase))
-                        return true;
+                    string existing = GetMember(named[handle], "Name") as string;
+                    if (!string.IsNullOrWhiteSpace(existing)) return existing;
                 }
             }
-            return false;
+            catch { }
+            try
+            {
+                object owner = instance ?? _latestMainInstance;
+                if (_whoIs != null && (_whoIs.IsStatic || owner != null))
+                {
+                    object resolved = _whoIs.Invoke(_whoIs.IsStatic ? null : owner, new object[] { handle });
+                    if (resolved is string name && !string.IsNullOrWhiteSpace(name)) return name;
+                }
+            }
+            catch (Exception ex) { Log("enRAGE NPC name lookup warning: " + Unwrap(ex)); }
+            return null;
         }
+
+
+
 
         private static void CommitRosterRecord(object instance, object record, bool newlyCreated, int handle)
         {
@@ -4526,15 +4011,178 @@ namespace EnRAGECompanionsExtension
             return null;
         }
 
+        private static bool UnregisterEscapedRosterMember(object instance, object record)
+        {
+            if (instance == null || record == null) return false;
+            string id = GetMember(record, "Id") as string;
+            string gang = GetMember(record, "Gang") as string;
+            string formerGang = !string.IsNullOrWhiteSpace(gang) ? gang :
+                GetMember(record, "FormerGang") as string;
+            if (string.IsNullOrWhiteSpace(formerGang))
+                formerGang = _recruitGangId;
+
+            bool changed = false;
+            if (!string.IsNullOrWhiteSpace(formerGang) && !string.Equals(gang, formerGang, StringComparison.OrdinalIgnoreCase))
+                changed |= SetMember(record, "FormerGang", formerGang);
+            if (!string.IsNullOrWhiteSpace(gang))
+                changed |= SetMember(record, "Gang", null);
+            changed |= SetMember(record, "BossId", null);
+            changed |= SetMember(record, "CampId", null);
+            changed |= SetMember(record, "CampKnown", false);
+            changed |= SetMember(record, "Affiliation", null);
+
+            IList storyRoster = GetMember(instance, "StoryRoster") as IList;
+            if (storyRoster != null)
+            {
+                foreach (object member in storyRoster.Cast<object>().ToArray())
+                {
+                    if (!object.ReferenceEquals(member, record) &&
+                        (string.IsNullOrWhiteSpace(id) ||
+                         !string.Equals(GetMember(member, "Id") as string, id, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    string memberGang = GetMember(member, "Gang") as string;
+                    string memberFormerGang = !string.IsNullOrWhiteSpace(memberGang) ? memberGang : formerGang;
+                    if (!string.IsNullOrWhiteSpace(memberFormerGang))
+                        SetMember(member, "FormerGang", memberFormerGang);
+                    SetMember(member, "Gang", null);
+                    SetMember(member, "BossId", null);
+                    SetMember(member, "CampId", null);
+                    SetMember(member, "CampKnown", false);
+                    SetMember(member, "Affiliation", null);
+                    storyRoster.Remove(member);
+                    changed = true;
+                }
+            }
+
+            SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
+            if (changed)
+            {
+                try { InvokeInstance(instance, "SaveRoster"); }
+                catch (Exception ex) { Log("Saving roster after companion escape failed: " + Unwrap(ex)); }
+            }
+            Log("Unregistered escaped companion from faction roster: " +
+                (GetMember(record, "Name") as string ?? id ?? "(unknown)") + "; it can be recruited again later.");
+            return changed;
+        }
+
+        private static void ForgetRecruitPedTracking(Ped ped, string id)
+        {
+            int handle = 0;
+            if (ped != null)
+            {
+                try { handle = ped.Handle; } catch { }
+            }
+            if (handle != 0)
+            {
+                RosterRecordsByPedHandle.Remove(handle);
+                AppliedPromptNames.Remove(handle);
+                CustomCompanionCombatTargets.Remove(handle);
+                CustomCombatSuppressedAt.Remove(handle);
+                AmbientReleasedRecruitPeds.Remove(handle);
+                AmbientReleasedWanderAt.Remove(handle);
+                if (_medicinePromptFor == handle) HideRecruitMedicinePrompt();
+                if (_combatStancePromptFor == handle) HideCombatStancePrompt();
+                if (_genericPromptFor == handle) HideGenericRecruitPrompt();
+            }
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                foreach (KeyValuePair<int, CachedRosterRecord> pair in RosterRecordsByPedHandle.ToArray())
+                {
+                    if (pair.Value == null ||
+                        !string.Equals(GetMember(pair.Value.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    int cachedHandle = pair.Key;
+                    RosterRecordsByPedHandle.Remove(cachedHandle);
+                    AppliedPromptNames.Remove(cachedHandle);
+                    CustomCompanionCombatTargets.Remove(cachedHandle);
+                    CustomCombatSuppressedAt.Remove(cachedHandle);
+                    AmbientReleasedRecruitPeds.Remove(cachedHandle);
+                    AmbientReleasedWanderAt.Remove(cachedHandle);
+                    if (_medicinePromptFor == cachedHandle) HideRecruitMedicinePrompt();
+                    if (_combatStancePromptFor == cachedHandle) HideCombatStancePrompt();
+                    if (_genericPromptFor == cachedHandle) HideGenericRecruitPrompt();
+                }
+                RecruitedRosterModels.Remove(id);
+                ClearLowHealthIncapacitationTracking(id);
+                LastObservedHealthById.Remove(id);
+                LastDamageBaselineById.Remove(id);
+                LastDamageAtById.Remove(id);
+                LastHealthSampleAtById.Remove(id);
+                LastInjuryRecoveryAtById.Remove(id);
+                LastInjuryPersistAtById.Remove(id);
+            }
+        }
+
+        private static bool ReleaseEscapedCompanion(object instance, object companion)
+        {
+            if (instance == null || companion == null) return false;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                GetFieldInt(companion, "State", -1) != 2)
+                return false;
+
+            object record = GetField(companion, "Rec");
+            if (record == null || IsExiledRosterRecord(record)) return false;
+            string id = GetMember(record, "Id") as string;
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists())
+            {
+                foreach (KeyValuePair<int, CachedRosterRecord> pair in RosterRecordsByPedHandle.ToArray())
+                {
+                    if (pair.Value == null ||
+                        !string.Equals(GetMember(pair.Value.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (pair.Value.Ped != null && pair.Value.Ped.Exists())
+                    {
+                        ped = pair.Value.Ped;
+                        break;
+                    }
+                }
+            }
+            if (GetMember(record, "IsAlive") is bool alive && !alive)
+                return false;
+            if (ped != null && ped.Exists() && ped.IsDead)
+                return false;
+
+            string name = GetMember(record, "Name") as string ?? GetField(companion, "Name") as string ?? T("companion.ally");
+            Ped horse = GetField(companion, "Horse") as Ped;
+
+            UnregisterEscapedRosterMember(instance, record);
+            SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
+
+            // Restore the NPC's saved settings, but detach it from Cleanup before Cleanup can
+            // clear the active flee/head-home task or delete a clone. Do not issue any new task.
+            try { InvokeInstance(instance, "RestoreReal", companion); }
+            catch (Exception ex) { Log("Escaped companion restore warning: " + Unwrap(ex)); }
+            if (horse != null && horse.Exists()) SetField(companion, "Horse", null);
+            SetField(companion, "Ped", null);
+            SetField(companion, "Real", null);
+            try { InvokeInstance(instance, "Cleanup", companion); }
+            catch (Exception ex) { Log("Escaped companion wrapper cleanup warning: " + Unwrap(ex)); }
+            if (ped != null && ped.Exists())
+            {
+                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+                try { PED.REMOVE_PED_FROM_GROUP(ped.Handle); } catch { }
+            }
+
+            IList companions = GetField(instance, "_comps") as IList;
+            if (companions != null)
+            {
+                try { companions.Remove(companion); } catch { }
+            }
+            ForgetRecruitPedTracking(ped, id);
+            ModelHashes.Remove(key);
+            InvokeInstance(instance, "ShowSubtitle", TF("companion.escaped", name));
+            Log("Released fleeing/returning companion " + name +
+                " from extension control without interrupting its current task.");
+            return true;
+        }
+
         private static void DismissRecruitedCompanion(object instance, object companion)
         {
             if (companion == null) return;
-            if (IsRosterRecordIncapacitated(GetField(companion, "Rec")))
-            {
-                InvokeInstance(instance, "ShowSubtitle", T("incapacitated.only_help"));
-                return;
-            }
-            string name = GetField(companion, "Name") as string ?? "Tu aliado";
+            string name = GetField(companion, "Name") as string ?? T("companion.ally");
             string key = GetField(companion, "Key") as string;
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
@@ -4544,14 +4192,12 @@ namespace EnRAGECompanionsExtension
             try { preserveHorse = ped != null && ped.Exists() && ped.IsOnMount && horse != null && horse.Exists(); } catch { }
             SetPersistentFollowState(GetField(companion, "Rec"), CompanionFollowState.Dismissed, null);
             string dismissedId = GetMember(GetField(companion, "Rec"), "Id") as string ?? string.Empty;
-            LastIndividualOrderTaskAt.Remove(dismissedId);
-            AutoAssistTargetByHelperId.Remove(dismissedId);
-            LastAutoAssistMoveAtByHelperId.Remove(dismissedId);
             LastObservedHealthById.Remove(dismissedId);
             LastDamageBaselineById.Remove(dismissedId);
             LastDamageAtById.Remove(dismissedId);
             LastHealthSampleAtById.Remove(dismissedId);
             LastInjuryRecoveryAtById.Remove(dismissedId);
+            ClearLowHealthIncapacitationTracking(dismissedId);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
@@ -4607,258 +4253,64 @@ namespace EnRAGECompanionsExtension
         }
         private static void MaintainExtensionCompanionDamageability(object companion, Ped player)
         {
-            if (companion == null) return;
+            if (companion == null || GetFieldInt(companion, "State", -1) == 2) return;
             string key = GetField(companion, "Key") as string;
             if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return;
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             if (ped == null || !ped.Exists() || ped.IsDead) return;
-
-            int state = GetFieldInt(companion, "State", -1), health = 0, maxHealth = 1;
-            try { health = ped.Health; } catch { }
-            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
-            CompanionPersistentState persistent = GetPersistentState(GetField(companion, "Rec"), false);
-            bool isPersistentlyIncapacitated = persistent != null && persistent.Injury != null &&
-                persistent.Injury.IsIncapacitated;
-            if (isPersistentlyIncapacitated)
-            {
-                // Keep an incapacitated but still-living ped from taking a lethal follow-up hit.
-                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
-                return;
-            }
-            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
-            if (state == 2 && health > 0 &&
-                health < (int)Math.Ceiling(maxHealth * 0.30))
-            {
-                try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
-                try
-                {
-                    if (player != null && player.Exists())
-                    {
-                        int group = PED.GET_PED_GROUP_INDEX(player.Handle);
-                        if (group > 0 && !PED.IS_PED_GROUP_MEMBER(ped.Handle, group, false))
-                            PED.SET_PED_AS_GROUP_MEMBER(ped.Handle, group);
-                    }
-                }
-                catch { }
-                SetField(companion, "State", 0);
-                SetField(companion, "AskedAt", Game.GameTime);
-                try { ped.BlockPermanentEvents = false; } catch { }
-            }
-        }
-
-        private static bool MaintainCompanionCondition(object instance, object companion, Ped player)
-        {
-            if (companion == null) return false;
-            string key = GetField(companion, "Key") as string;
-            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return false;
-            object record = GetField(companion, "Rec");
-            string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id)) return false;
-            if (record == null || IsExiledRosterRecord(record) ||
-                (GetMember(record, "IsAlive") is bool alive && !alive))
-            {
-                AutoAssistTargetByHelperId.Remove(id);
-                LastAutoAssistMoveAtByHelperId.Remove(id);
-                return false;
-            }
-            Ped ped = GetField(companion, "Ped") as Ped;
-            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
-            if (ped == null || !ped.Exists()) return false;
-
-            // An assigned helper temporarily overrides its normal follow/wait task so it can
-            // approach the downed recruit. The paired recovery starts only once they're close.
-            string assignedTargetId;
-            if (AutoAssistTargetByHelperId.TryGetValue(id, out assignedTargetId))
-            {
-                bool cancelAssist = player == null || !player.Exists() || player.IsInCombat ||
-                    ped.IsDead || ped.IsInCombat || ped.IsOnMount || GetFieldInt(companion, "State", 2) == 2;
-                object targetCompanion = cancelAssist ? null : FindActiveExtensionCompanion(instance, assignedTargetId);
-                object targetRecord = targetCompanion == null ? null : GetField(targetCompanion, "Rec");
-                Ped targetPed = targetCompanion == null ? null : GetField(targetCompanion, "Ped") as Ped;
-                if (targetPed == null || !targetPed.Exists())
-                    targetPed = targetCompanion == null ? null : GetField(targetCompanion, "Real") as Ped;
-
-                if (targetRecord == null || targetPed == null || !targetPed.Exists() ||
-                    IsExiledRosterRecord(targetRecord) ||
-                    (!(GetMember(targetRecord, "IsAlive") is bool targetAlive) || !targetAlive))
-                    cancelAssist = true;
-
-                int targetRecoveryUntil;
-                if (!cancelAssist &&
-                    RecoveryAnimationUntilById.TryGetValue(assignedTargetId, out targetRecoveryUntil) &&
-                    Game.GameTime < targetRecoveryUntil)
-                    cancelAssist = true;
-
-                bool targetDown = false;
-                if (!cancelAssist)
-                {
-                    CompanionPersistentState targetState = GetPersistentState(targetRecord, false);
-                    targetDown = IsNativeWoundedDown(instance, targetPed) ||
-                        (targetState != null && targetState.Injury != null &&
-                         targetState.Injury.IsIncapacitated && !targetPed.IsDead);
-                    if (!targetDown) cancelAssist = true;
-                }
-
-                if (cancelAssist)
-                {
-                    AutoAssistTargetByHelperId.Remove(id);
-                    LastAutoAssistMoveAtByHelperId.Remove(id);
-                }
-                else
-                {
-                    float distance;
-                    try { distance = targetPed.Position.DistanceTo(ped.Position); }
-                    catch { distance = float.MaxValue; }
-
-                    if (distance <= 2.35f)
-                    {
-                        AutoAssistTargetByHelperId.Remove(id);
-                        LastAutoAssistMoveAtByHelperId.Remove(id);
-                        if (HelpIncapacitatedCompanion(instance, targetRecord, targetPed, ped))
-                            return true;
-                    }
-                    else
-                    {
-                        int nextMoveAt;
-                        if (!LastAutoAssistMoveAtByHelperId.TryGetValue(id, out nextMoveAt) ||
-                            Game.GameTime >= nextMoveAt)
-                        {
-                            bool moving = TryInvokeTaskNative("TASK_GO_STRAIGHT_TO_COORD",
-                                new object[] { ped.Handle, targetPed.Position.X, targetPed.Position.Y,
-                                    targetPed.Position.Z, 1.0f, 2000, targetPed.Heading, 1.0f });
-                            if (moving)
-                                LastAutoAssistMoveAtByHelperId[id] = Game.GameTime + 1100;
-                            else
-                            {
-                                AutoAssistTargetByHelperId.Remove(id);
-                                LastAutoAssistMoveAtByHelperId.Remove(id);
-                                Log("Could not route recruit " + id + " to assist " + assignedTargetId + ".");
-                            }
-                        }
-                        if (AutoAssistTargetByHelperId.ContainsKey(id)) return true;
-                    }
-                }
-            }
-
-            int recoveryUntil;
-            if (!string.IsNullOrWhiteSpace(id) && RecoveryAnimationUntilById.TryGetValue(id, out recoveryUntil))
-            {
-                if (Game.GameTime < recoveryUntil) return true;
-                RecoveryAnimationUntilById.Remove(id);
-            }
-
-            CompanionPersistentState state = GetPersistentState(record, true);
-            if (state == null || state.Injury == null) return false;
-            int now = Game.GameTime, health = 0, maxHealth = 1;
-            try { health = ped.Health; } catch { }
-            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { maxHealth = 1; }
-
-            if (state.Injury.IsIncapacitated)
-            {
-                int recoveredHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
-                bool nativeDown = IsNativeWoundedDown(instance, ped);
-                bool stillDown = ped.IsDead || nativeDown || ped.IsIncapacitated || ped.IsRagdoll;
-                if (!stillDown && health >= recoveredHealth)
-                {
-                    // _INCAPACITATED_REVIVE has completed the native recovery animation.
-                    state.Injury.IsIncapacitated = false;
-                    state.Injury.IncapacitatedSinceUtcTicks = 0;
-                    state.Injury.IsInjured = state.Injury.Severity > 0 || state.Injury.RecoverySecondsRemaining > 0;
-                    SavePersistentState(state);
-                    SetMember(record, "IsAlive", true);
-                    SetMember(record, "PresumedDead", false);
-                    try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
-                    LastObservedHealthById[id] = health;
-                    LastDamageBaselineById[id] = health;
-                    LastHealthSampleAtById[id] = now;
-                    LastDamageAtById.Remove(id);
-                    LastInjuryRecoveryAtById[id] = now;
-                    try { InvokeInstance(instance, "SaveRoster"); } catch { }
-                }
-                else
-                {
-                    // Do not undo the protection installed for a downed recruit.
-                    try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, true); } catch { }
-                    return true;
-                }
-            }
-
-            // enRAGE's Adopt marks real companions invincible. Re-enable damage before sampling.
             try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); }
             catch (Exception ex) { Log("Could not restore recruit damageability: " + Unwrap(ex)); }
+        }
 
+
+        private static void MaintainCompanionInjury(object instance, object companion)
+        {
+            if (companion == null) return;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return;
+            object record = GetField(companion, "Rec");
+            string id = GetMember(record, "Id") as string;
+            if (string.IsNullOrWhiteSpace(id) || record == null || IsExiledRosterRecord(record) ||
+                (GetMember(record, "IsAlive") is bool alive && !alive)) return;
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead) return;
+            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); }
+            catch (Exception ex) { Log("Could not restore recruit damageability: " + Unwrap(ex)); }
+            CompanionPersistentState state = GetPersistentState(record, true);
+            if (state == null || state.Injury == null) return;
+            int now = Game.GameTime, health = 0, maxHealth = 1;
+            try { health = ped.Health; } catch { }
+            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
             int previousHealth;
-            bool hasPreviousHealth = LastObservedHealthById.TryGetValue(id, out previousHealth);
-            if (hasPreviousHealth && health < previousHealth) LastDamageAtById[id] = now;
+            if (LastObservedHealthById.TryGetValue(id, out previousHealth) && health < previousHealth)
+                LastDamageAtById[id] = now;
             int baseline;
             if (!LastDamageBaselineById.TryGetValue(id, out baseline))
             {
                 baseline = health;
                 LastDamageBaselineById[id] = health;
             }
-
-            if (IsLikelyIncapacitated(instance, record, ped, id))
+            if (_enableInjurySystem && health < baseline)
             {
-                TryEnterIncapacitated(instance, record, ped);
-                LastObservedHealthById[id] = Math.Max(1, health);
-                LastHealthSampleAtById[id] = now;
-                return true;
-            }
-
-            if (state.Injury.IsIncapacitated)
-            {
-                // Some API builds do not report IsRagdoll/IsIncapacitated while TASK_KNOCKED_OUT
-                // is starting. Do not clear the persistent down state until the ped has recovered
-                // at least the configured assistance health, or the player's help handler clears it.
-                int recoveredHealth = Math.Max(1, (int)Math.Ceiling(maxHealth * _incapacitatedHealthPercent / 100.0));
-                if (!ped.IsDead && !ped.IsIncapacitated && !ped.IsRagdoll && health >= recoveredHealth)
+                int delta = baseline - health;
+                int threshold = Math.Max(1, (int)Math.Ceiling(maxHealth * _injuryDamageThresholdPercent / 100.0));
+                if (delta >= threshold)
                 {
-                    state.Injury.IsIncapacitated = false;
-                    state.Injury.IncapacitatedSinceUtcTicks = 0;
+                    bool wasInjured = state.Injury.IsInjured;
+                    state.Injury.IsInjured = true;
+                    state.Injury.Severity = Math.Max(state.Injury.Severity, Math.Max(1, Math.Min(100,
+                        (int)Math.Ceiling(delta * 100.0 / maxHealth))));
+                    if (state.Injury.FirstInjuredUtcTicks <= 0) state.Injury.FirstInjuredUtcTicks = DateTime.UtcNow.Ticks;
+                    state.Injury.RecoverySecondsRemaining = Math.Max(state.Injury.RecoverySecondsRemaining, _injuryRecoverySeconds);
                     SavePersistentState(state);
-                }
-                else if (ped.IsDead)
-                {
-                    long since = state.Injury.IncapacitatedSinceUtcTicks;
-                    if (since > 0 && DateTime.UtcNow.Ticks - since < TimeSpan.FromMinutes(1).Ticks)
-                    {
-                        TryEnterIncapacitated(instance, record, ped);
-                        LastObservedHealthById[id] = Math.Max(1, health);
-                        LastHealthSampleAtById[id] = now;
-                        return true;
-                    }
-                }
-            }
-
-            if (ped.IsDead) return false;
-            if (_enableInjurySystem)
-            {
-                // Accumulate small hits against a stable baseline. Comparing only to the previous
-                // frame meant repeated sub-threshold hits were invisible to the injury system.
-                if (health > baseline)
                     LastDamageBaselineById[id] = health;
-                else if (health < baseline)
-                {
-                    int delta = baseline - health;
-                    int threshold = Math.Max(1, (int)Math.Ceiling(maxHealth * _injuryDamageThresholdPercent / 100.0));
-                    if (delta >= threshold)
-                    {
-                        bool wasInjured = state.Injury.IsInjured;
-                        state.Injury.IsInjured = true;
-                        state.Injury.Severity = Math.Max(state.Injury.Severity, Math.Max(1, Math.Min(100,
-                            (int)Math.Ceiling(delta * 100.0 / maxHealth))));
-                        if (state.Injury.FirstInjuredUtcTicks <= 0) state.Injury.FirstInjuredUtcTicks = DateTime.UtcNow.Ticks;
-                        state.Injury.RecoverySecondsRemaining = Math.Max(state.Injury.RecoverySecondsRemaining, _injuryRecoverySeconds);
-                        SavePersistentState(state);
-                        LastDamageBaselineById[id] = health;
-                        if (!wasInjured)
-                            InvokeInstance(instance, "ShowSubtitle", TF("injury.detected", GetMember(record, "Name") as string ?? T("companion.default")));
-                        Log("Tracked companion injury " + id + "; damage=" + delta + ", severity=" + state.Injury.Severity + ".");
-                    }
+                    if (!wasInjured)
+                        Log("Tracked nonfatal injury for " + id + "; damage=" + delta + ", severity=" + state.Injury.Severity + ".");
                 }
             }
-
+            else if (health > baseline) LastDamageBaselineById[id] = health;
             LastObservedHealthById[id] = health;
             int previousSample;
             if (!LastHealthSampleAtById.TryGetValue(id, out previousSample) || now < previousSample || now - previousSample >= 1000)
@@ -4866,13 +4318,13 @@ namespace EnRAGECompanionsExtension
                 LastHealthSampleAtById[id] = now;
                 RecoverInjuryOverTime(id, state, now);
             }
-            return false;
         }
+
 
         private static void RecoverInjuryOverTime(string id, CompanionPersistentState state, int now)
         {
             if (!_enableInjurySystem || state == null || state.Injury == null ||
-                !state.Injury.IsInjured || state.Injury.IsIncapacitated)
+                !state.Injury.IsInjured)
             {
                 LastInjuryRecoveryAtById[id] = now;
                 return;
@@ -4906,171 +4358,31 @@ namespace EnRAGECompanionsExtension
                     Log("Companion injury recovery completed for " + id + ".");
             }
         }
-        private static bool IsLikelyIncapacitated(object instance, object record, Ped ped, string id)
-        {
-            if (ped == null || !ped.Exists()) return false;
-            if (IsNativeWoundedDown(instance, ped)) return true;
-            if (_woundedDown == null)
-            {
-                try { if (ped.IsIncapacitated) return true; } catch { }
-            }
-            // Some RDR2 ped types do not expose IsRagdoll reliably while going down.
-            // A recently damaged recruit at or below 20% health should still enter the recoverable
-            // incapacitated state; TryEnterIncapacitated applies the knocked-out task when possible.
-            if (!ped.IsDead && _enableInjurySystem)
-            {
-                int lastDamage, maxHealth = 1, health = 0;
-                try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
-                try { health = ped.Health; } catch { }
-                int threshold = Math.Max(1, (int)Math.Ceiling(maxHealth * 0.20));
-                if (health > 0 && health <= threshold && !string.IsNullOrWhiteSpace(id) &&
-                    LastDamageAtById.TryGetValue(id, out lastDamage) && Game.GameTime >= lastDamage &&
-                    Game.GameTime - lastDamage <= 10000)
-                    return true;
-            }
-            CompanionPersistentState state = GetPersistentState(record, false);
-            if (ped.IsDead)
-            {
-                // A dead ped is recoverable only while enRAGE still recognizes its native
-                // wound-incapacitation state. Do not turn an ordinary death into a revive.
-                if (_woundedDown == null)
-                {
-                    try { if (TryStaticBool("LooksKnockedOut", ped)) return true; } catch { }
-                }
-                return false;
-            }
-            if (state != null && state.Injury != null && state.Injury.IsIncapacitated &&
-                (ped.IsIncapacitated || ped.IsRagdoll)) return true;
-            return false;
-        }
 
-        private static bool IsNativeWoundedDown(object instance, Ped ped)
-        {
-            if (ped == null || !ped.Exists()) return false;
-            if (_woundedDown != null)
-            {
-                object owner = instance ?? _latestMainInstance;
-                if (owner == null) return false;
-                try { return _woundedDown.Invoke(owner, new object[] { ped }) is bool down && down; }
-                catch (Exception ex) { Log("Native WoundedDown check failed: " + Unwrap(ex)); return false; }
-            }
-            try
-            {
-                if (ped.IsIncapacitated && (!ped.IsDead || TryStaticBool("LooksKnockedOut", ped))) return true;
-            }
-            catch { }
-            return false;
-        }
 
-        private static bool IsRosterRecordIncapacitated(object record)
-        {
-            if (record == null) return false;
-            CompanionPersistentState state = GetPersistentState(record, false);
-            return state != null && state.Injury != null && state.Injury.IsIncapacitated;
-        }
 
-        private static bool IsPedIncapacitatedRecruit(Ped ped)
-        {
-            if (ped == null || !ped.Exists()) return false;
-            CachedRosterRecord cached;
-            if (!RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cached) || cached == null || cached.Record == null)
-            {
-                if (_woundedDown == null) try { return ped.IsIncapacitated; } catch { }
-                return false;
-            }
-            if (IsNativeWoundedDown(_latestMainInstance, ped)) return true;
-            CompanionPersistentState state = GetPersistentState(cached.Record, false);
-            if (state != null && state.Injury != null && state.Injury.IsIncapacitated)
-                return !ped.IsDead || IsNativeWoundedDown(_latestMainInstance, ped);
-            if (_woundedDown == null) try { return ped.IsIncapacitated; } catch { }
-            return false;
-        }
-        private static bool TryEnterIncapacitated(object instance, object record, Ped ped)
-        {
-            if (instance == null || record == null || ped == null || !ped.Exists() ||
-                IsExiledRosterRecord(record) || (GetMember(record, "IsAlive") is bool alive && !alive)) return false;
-            string id = GetMember(record, "Id") as string;
-            if (string.IsNullOrWhiteSpace(id) || !IsRecruitedRosterRecord(record)) return false;
-            CompanionPersistentState state = GetPersistentState(record, true);
-            if (state == null || state.Injury == null) return false;
-
-            bool wasIncapacitated = state.Injury.IsIncapacitated;
-            bool wasInjured = state.Injury.IsInjured;
-            int oldSeverity = state.Injury.Severity;
-            double oldRecovery = state.Injury.RecoverySecondsRemaining;
-            long oldFirstInjured = state.Injury.FirstInjuredUtcTicks;
-            long oldSince = state.Injury.IncapacitatedSinceUtcTicks;
-            bool rosterAlive = GetMember(record, "IsAlive") is bool aliveBefore && aliveBefore;
-            bool presumedDead = GetMember(record, "PresumedDead") is bool wasPresumedDead && wasPresumedDead;
-
-            state.Injury.IsIncapacitated = true;
-            state.Injury.IsInjured = true;
-            state.Injury.Severity = Math.Max(40, state.Injury.Severity);
-            if (state.Injury.FirstInjuredUtcTicks <= 0) state.Injury.FirstInjuredUtcTicks = DateTime.UtcNow.Ticks;
-            if (state.Injury.IncapacitatedSinceUtcTicks <= 0) state.Injury.IncapacitatedSinceUtcTicks = DateTime.UtcNow.Ticks;
-            state.Injury.RecoverySecondsRemaining = Math.Max(state.Injury.RecoverySecondsRemaining, _injuryRecoverySeconds);
-            SetMember(record, "IsAlive", true);
-            SetMember(record, "PresumedDead", false);
-            bool changed = !wasIncapacitated || !wasInjured || oldSeverity != state.Injury.Severity ||
-                Math.Abs(oldRecovery - state.Injury.RecoverySecondsRemaining) > 0.01 ||
-                oldFirstInjured != state.Injury.FirstInjuredUtcTicks || oldSince != state.Injury.IncapacitatedSinceUtcTicks ||
-                !rosterAlive || presumedDead;
-
-            if (!ped.IsDead && !wasIncapacitated && !IsNativeWoundedDown(instance, ped))
-            {
-                // Simulated extension incapacitation needs a knock-out task; when enRAGE has
-                // already classified a real wound, preserve its native wounded-down animation.
-                // Never call RESURRECT_PED here.
-                TryInvokeTaskNative("TASK_KNOCKED_OUT", new object[] { ped.Handle, -1.0f, false });
-            }
-
-            if (changed)
-            {
-                SavePersistentState(state);
-                try { InvokeInstance(instance, "SaveRoster"); } catch { }
-            }
-            if (!wasIncapacitated)
-                InvokeInstance(instance, "ShowSubtitle", TF("incapacitated.entered", GetMember(record, "Name") as string ?? T("companion.default")));
-            return true;
-        }
 
         private static void MarkRecruitedCompanionDeath(object instance, object companion)
         {
             try
             {
                 string key = GetField(companion, "Key") as string;
-                if (string.IsNullOrEmpty(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
-                    return;
-
+                if (string.IsNullOrEmpty(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) return;
                 object record = GetField(companion, "Rec");
-                if (record == null || !(GetMember(record, "IsAlive") is bool alive) || !alive)
-                    return;
-
+                if (record == null || !(GetMember(record, "IsAlive") is bool alive) || !alive) return;
                 Ped ped = GetField(companion, "Ped") as Ped;
-                if (ped == null || !ped.Exists())
-                    ped = GetField(companion, "Real") as Ped;
-                if (ped == null || !ped.Exists() || !ped.IsDead)
-                    return;
-                string recordId = GetMember(record, "Id") as string;
-                if (IsLikelyIncapacitated(instance, record, ped, recordId))
-                {
-                    TryEnterIncapacitated(instance, record, ped);
-                    return;
-                }
-
+                if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+                if (ped == null || !ped.Exists() || !ped.IsDead) return;
                 SetMember(record, "IsAlive", false);
                 SetMember(record, "PresumedDead", false);
                 string zone = InvokeInstance(instance, "GetZoneName", ped.Position) as string;
-                if (!string.IsNullOrWhiteSpace(zone))
-                    SetMember(record, "LastDefeatLocation", zone);
+                if (!string.IsNullOrWhiteSpace(zone)) SetMember(record, "LastDefeatLocation", zone);
                 InvokeInstance(instance, "SaveRoster");
                 Log("Marked recruited roster member dead: " + (GetMember(record, "Name") as string ?? key) + ".");
             }
-            catch (Exception ex)
-            {
-                Log("Recruited companion death tracking warning: " + Unwrap(ex));
-            }
+            catch (Exception ex) { Log("Recruited companion death tracking warning: " + Unwrap(ex)); }
         }
+
 
         private static Ped TuplePed(object tuple)
         {
@@ -5306,23 +4618,11 @@ namespace EnRAGECompanionsExtension
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                { "order.wait_disabled", "El modo de espera está desactivado en el archivo INI." },
-                { "order.need_called", "Primero debes llamar a este compañero desde el roster." },
-                { "order.not_found", "No se pudo localizar al compañero para aplicar la orden." },
-                { "order.following", "{0} vuelve a seguirte." },
-                { "order.waiting", "{0} esperará aquí." },
-                { "order.wait_label", "Quédate aquí" },
-                { "order.follow_label", "Sígueme" },
-                { "affinity.disabled", "La afinidad está desactivada en el archivo INI." },
-                { "affinity.status", "{0}: afinidad {1}/100." },
-                { "affinity.meter", "AFINIDAD {0}/100" },
                 { "action.call", "Llamarlo" },
                 { "action.dismiss", "Dejar de seguirme" },
                 { "action.kick", "Echar de la banda" },
                 { "action.kick.confirm", "Confirmar expulsión" },
                 { "action.kick.cancel", "Cancelar expulsión" },
-                { "action.affinity.increase", "Mejorar afinidad (+10)" },
-                { "action.affinity.decrease", "Reducir afinidad (-10)" },
                 { "subtitle.kick.cancelled", "Expulsión cancelada." },
                 { "subtitle.already_following", "Ese miembro ya te está siguiendo." },
                 { "subtitle.cannot_kick_following", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero." },
@@ -5354,23 +4654,8 @@ namespace EnRAGECompanionsExtension
                 { "companion.default", "Tu compañero" },
                 { "companion.ally", "Tu aliado" },
                 { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
+                { "companion.escaped", "{0} huyó y dejó de formar parte de tu banda." },
                 { "companion.recruited", "{0} ahora combate de tu lado." },
-                { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
-                { "incapacitated.prompt", "Ayudar a levantarse" },
-                { "incapacitated.only_help", "Está incapacitado por una herida. La única interacción disponible es ayudarlo a levantarse." },
-                { "incapacitated.revive_unavailable", "No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado." },
-                { "incapacitated.health_failed", "No se pudo restaurar la salud; el compañero sigue incapacitado." },
-                { "incapacitated.still_down", "El compañero todavía no puede levantarse; sigue incapacitado." },
-                { "incapacitated.verify_failed", "No se pudo verificar la recuperación; el compañero sigue incapacitado." },
-                { "incapacitated.entered", "{0} ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse." },
-                { "incapacitated.helped", "{0} se ha levantado. La herida seguirá recuperándose con el tiempo." },
-                { "stance.prefix", "Postura: {0}" },
-                { "stance.hold", "Mantener posición" },
-                { "stance.cover", "Cubrir al jugador" },
-                { "stance.defend", "Defender la zona" },
-                { "stance.fire", "Fuego a mi señal" },
-                { "stance.follow", "Seguir órdenes" },
-                { "stance.changed", "{0}: postura {1}." },
                 { "prompt.medicine", "Dar remedio (${0})" }
             };
         }
@@ -5470,7 +4755,7 @@ namespace EnRAGECompanionsExtension
                 if (File.Exists(path))
                 {
                     string[] existingLines = File.ReadAllLines(path);
-                    // Remove only the obsolete, known extension-generated appearance settings.
+                    // Remove only obsolete, known extension-generated settings.
                     // Their behavior was removed; leave all unrelated user configuration intact.
                     string[] cleanedLines = existingLines.Where(raw =>
                     {
@@ -5484,7 +4769,10 @@ namespace EnRAGECompanionsExtension
                         return !key.Equals("EnableAppearancePersistence", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("PreserveSavedOutfit", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("RestDurationSeconds", StringComparison.OrdinalIgnoreCase) &&
-                               !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase);
+                               !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase);
                     }).ToArray();
                     if (cleanedLines.Length != existingLines.Length)
                     {
@@ -5516,19 +4804,15 @@ namespace EnRAGECompanionsExtension
                     if (!existingKeys.Contains("AffinityTravelGain")) missingSettings.Add("AffinityTravelGain=1");
                     if (!existingKeys.Contains("AffinityCombatGain")) missingSettings.Add("AffinityCombatGain=2");
                     if (!existingKeys.Contains("AffinityTreatmentGain")) missingSettings.Add("AffinityTreatmentGain=3");
-                    if (!existingKeys.Contains("EnableIndividualOrders")) missingSettings.Add("EnableIndividualOrders=true");
-                    if (!existingKeys.Contains("EnableWaitMode")) missingSettings.Add("EnableWaitMode=true");
-                    if (!existingKeys.Contains("WaitRadius")) missingSettings.Add("WaitRadius=8.0");
                     if (!existingKeys.Contains("EnableInjurySystem")) missingSettings.Add("EnableInjurySystem=true");
                     if (!existingKeys.Contains("InjuryDamageThresholdPercent")) missingSettings.Add("InjuryDamageThresholdPercent=10");
                     if (!existingKeys.Contains("InjuryRecoverySeconds")) missingSettings.Add("InjuryRecoverySeconds=180");
-                    if (!existingKeys.Contains("IncapacitatedHealthPercent")) missingSettings.Add("IncapacitatedHealthPercent=35");
                     if (!existingKeys.Contains("MedicineHealingPercent")) missingSettings.Add("MedicineHealingPercent=100");
                     if (!existingKeys.Contains("MedicineRecoveryReductionSeconds")) missingSettings.Add("MedicineRecoveryReductionSeconds=60");
                     if (!existingKeys.Contains("RecruitMedicineCostCents")) missingSettings.Add("RecruitMedicineCostCents=100");
                     if (missingSettings.Count > 0)
                     {
-                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity and individual companion orders" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
+                        File.AppendAllText(path, Environment.NewLine + "; Added settings for affinity, injury, and medicine" + Environment.NewLine + string.Join(Environment.NewLine, missingSettings) + Environment.NewLine);
                     }
                     foreach (string raw in existingLines)
                     {
@@ -5562,21 +4846,12 @@ namespace EnRAGECompanionsExtension
                             _affinityCombatGain = Math.Max(0, Math.Min(100, combatGain));
                         else if (key.Equals("AffinityTreatmentGain", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int treatmentGain))
                             _affinityTreatmentGain = Math.Max(0, Math.Min(100, treatmentGain));
-                        else if (key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableOrders))
-                            _enableIndividualOrders = enableOrders;
-                        else if (key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableWait))
-                            _enableWaitMode = enableWait;
-                        else if (key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase) &&
-                                 float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float waitRadius))
-                            _waitRadius = Math.Max(1.0f, Math.Min(50.0f, waitRadius));
                         else if (key.Equals("EnableInjurySystem", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out bool enableInjurySystem))
                             _enableInjurySystem = enableInjurySystem;
                         else if (key.Equals("InjuryDamageThresholdPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryThreshold))
                             _injuryDamageThresholdPercent = Math.Max(1, Math.Min(50, injuryThreshold));
                         else if (key.Equals("InjuryRecoverySeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int injuryRecovery))
                             _injuryRecoverySeconds = Math.Max(15, Math.Min(86400, injuryRecovery));
-                        else if (key.Equals("IncapacitatedHealthPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int incapacitatedHealth))
-                            _incapacitatedHealthPercent = Math.Max(10, Math.Min(75, incapacitatedHealth));
                         else if (key.Equals("MedicineHealingPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineHealing))
                             _medicineHealingPercent = Math.Max(1, Math.Min(100, medicineHealing));
                         else if (key.Equals("MedicineRecoveryReductionSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out int medicineReduction))
@@ -5605,13 +4880,9 @@ namespace EnRAGECompanionsExtension
                         "AffinityTravelGain=1\r\n" +
                         "AffinityCombatGain=2\r\n" +
                         "AffinityTreatmentGain=3\r\n" +
-                        "EnableIndividualOrders=true\r\n" +
-                        "EnableWaitMode=true\r\n" +
-                        "WaitRadius=8.0\r\n" +
                         "EnableInjurySystem=true\r\n" +
                         "InjuryDamageThresholdPercent=10\r\n" +
                         "InjuryRecoverySeconds=180\r\n" +
-                        "IncapacitatedHealthPercent=35\r\n" +
                         "MedicineHealingPercent=100\r\n" +
                         "MedicineRecoveryReductionSeconds=60\r\n" +
                         "RecruitMedicineCostCents=100\r\n" +

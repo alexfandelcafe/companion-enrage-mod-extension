@@ -10,14 +10,14 @@ This project is a **separate ScriptHookRDR2DotNet V2 script** intended to integr
 - Intercepts `Ask(Ped, string, Ped)` for extension-only keys, avoiding the original `CampPeople[key]` lookup.
 - Creates enRAGE's private `Companion` object and calls enRAGE's own `Adopt` and `Setup` methods.
 - Adds each recruited pedestrian to enRAGE's persistent `Roster` under the faction configured by `RecruitGangId`. The default is Van der Linde (`vdl`): because this built-in faction is story-only and uses a separate `StoryRoster` for its F11 view, the extension mirrors `vdl` records into `StoryRoster`. Existing ordinary/custom factions use the normal `Roster` list filtered by `Gang`; the extension does not create the faction itself, so its ID must already exist in enRAGE. Existing records are reused; new `NemesisRecord` objects are created directly with the required roster fields to avoid `NewRecord` index errors for models/factions with empty name arrays.
-- Integrates recruited companions with enRAGE's native `WoundedDown` wound-incapacitation check. Only that wounded-down state (or the extension's recent-damage threshold for a still-living ped) is treated as recoverable; a confirmed death is not converted into an incapacitation. While down, the roster record is retained and the only contextual interaction is `Ayudar a levantarse`. The prompt uses `_INCAPACITATED_REVIVE` where exposed by the runtime; after combat ends, the nearest active recruit within the assistance radius can be tasked to approach and help automatically.
+- Recruited companions remain damageable and use the game's normal death behavior. The extension no longer attempts to trigger, track, or recover a special incapacitated/downed state.
 - Changes the recruited companion's interaction from `Mandar al campamento` to `Dejar de seguirme`. Dismissing an extension recruit stops the active follow state but does not remove the persistent roster record. The extension also prevents the original recruitment location from being treated as a real camp.
 - Allows eligible ordinary **male** NPCs and enRAGE live-camp peds. Candidate detection and the final recruitment entry point both check the model-gender helper (`NemesisSystem.Models.Female`); female models never receive the recruitment prompt and cannot be recruited through the extension. A live-camp ped is removed from the matching internal camp list before adoption. Other enRAGE-managed roles are excluded in this prototype because their controllers need role-specific handoff logic.
 - Intercepts `SpawnCompanion` for extension recruits so the extension can respawn the original model by its stored model hash rather than trying to reverse-hash a model-name string.
 - Keeps dismissed recruits friendly to the player using both the active player relationship group and the canonical `PLAYER` group, reasserted during session maintenance. The extension resets their enRAGE `Hate`/`Fear` values and blocks hostile ambient event reactions while preserving their explicitly assigned wander task, reducing retaliatory behavior if the player stares at or bumps into them.
 - After dismissal, detaches the enRAGE wrapper without deleting the pedestrian, clears companion/group tasks, restores a friendly player-side relationship independent of the roster faction, and issues an ambient wander task. The released NPC keeps its explicit wander task while `BlockPermanentEvents=true` suppresses ambient anger/retaliation events; if he was mounted, the extension asks him to dismount before starting to wander. Recruits remain damageable and can die.
 - Suppresses enRAGE's `$5`, drink, hat-tip, and handshake social prompt for any recruited pedestrian still mapped to its roster record, regardless of whether the recruit is currently following the player. The ordinary social prompt resumes for unrelated NPCs.
-- Suppresses enRAGE's interrogation eligibility and clears its short-lived cached prompt for recruited NPCs, so `Interrogar` does not replace companion interaction. While injured and incapacitated, contextual follow/wait/stance/medicine prompts and roster dismissal/expulsion actions are disabled; only `Ayudar a levantarse` is offered. When recovered, `Dejar de seguirme` remains available and retains the roster entry.
+- Suppresses enRAGE's interrogation eligibility and clears its short-lived cached prompt for recruited NPCs, so `Interrogar` does not replace companion interaction. Injury tracking and paid treatment remain; incapacitation/revival and combat-stance text options have been removed.
 - Adds `Llamarlo` to the existing character-sheet action list for extension roster records (`extcomp_` IDs, legacy `extvdl_` IDs, and records cached as recruits). Before spawning anything, it searches the exact roster-record-to-ped cache and enRAGE's nearby `PedSnapshot`/`RecordAt` data; if that same living pedestrian still exists, it re-adopts that entity and does not clone another NPC. It only uses the existing spawn/setup path when no matching live entity can be found. The companion horse is created through `Setup`, and the member is ordered to mount and ride toward the player. The action is available for living members only and respects `MaxCompanions`.
 - Reapplies the roster name to the RDR2 native focus/aim prompt (`_SET_PED_PROMPT_NAME`) after both recruitment and re-adoption. It uses enRAGE's persistent-string helper and registers the same name in enRAGE's `_named` table with `Met=true`, preventing its own name-resolution path from falling back to an unrelated alias or `a stranger`.
 - Replaces the stock broad hated-target combat loop for extension recruits only. They remain passive until a nearby pedestrian is actually in combat with the player; merely hostile or passing NPCs are not selected. Surrendered, fleeing, downed, hogtied, ragdolling, writhing, or knocked-out NPCs are excluded. enRAGE's original story companions keep their original combat behavior.
@@ -52,13 +52,9 @@ AffinityTravelIntervalSeconds=300
 AffinityTravelGain=1
 AffinityCombatGain=2
 AffinityTreatmentGain=3
-EnableIndividualOrders=true
-EnableWaitMode=true
-WaitRadius=8.0
 EnableInjurySystem=true
 InjuryDamageThresholdPercent=10
 InjuryRecoverySeconds=180
-IncapacitatedHealthPercent=35
 MedicineHealingPercent=100
 MedicineRecoveryReductionSeconds=60
 RecruitMedicineCostCents=100
@@ -71,13 +67,11 @@ RecruitMedicineCostCents=100
 - `EnableAffinity`: enables persistent affinity tracking. For extension recruits, the saved 0–100 affinity is mapped to enRAGE's native `RegardOfRecord(NemesisRecord)` result on its -100..100 scale, which the built-in story roster uses for its relationship-toward-player display. No second affinity meter or test-only affinity actions are added. The exact in-game display still requires testing against the installed enRAGE build.
 - `AffinityTravelIntervalSeconds`: seconds between travel checks (clamped to 30–7200). Travel gain is awarded when the companion remains nearby and the player has moved at least 100 metres during the interval.
 - `AffinityTravelGain`, `AffinityCombatGain`, `AffinityTreatmentGain`: gains for travel, combat (at most once per 30 seconds of an encounter), and a successful paid treatment. Affinity is clamped to 0–100; the native story-regard hook converts it to the built-in -100..100 scale when the roster asks for the relationship value.
-- `EnableIndividualOrders`: enables contextual order prompts when aiming at an active extension companion. With default controls the primary order uses the context-no action (F), incapacitation recovery uses E, and medicine/stance prompts use a separate action. They are not added to the roster sheet and do not intentionally rebind the native G action.
-- `EnableWaitMode`: controls `Quédate aquí`; when enabled the companion returns to the saved anchor if it exceeds `WaitRadius`, then remains there instead of running enRAGE's default follow task.
-- `WaitRadius`: radius in metres around the saved wait position (clamped to 1–50 m; default 8).
+- Native social interactions also affect affinity: while RDR2 identifies the recruit as the interaction target, `Saludar` adds 2 and `Provocar` subtracts 3. A nearby recruit detected as shoved or physically attacked loses 5. If the targeted recruit loses health within a brief window after the player fires, affinity loses 8; this is a time-window heuristic, not verified damage-source attribution. Adjustments use per-action cooldowns and are fixed in code rather than configured through the INI.
+- The custom `Quédate aquí` / `Sígueme` wait-order prompt and the manual incapacitation-recovery prompt have been removed. Legacy INI keys `EnableIndividualOrders`, `EnableWaitMode`, and `WaitRadius` are ignored and removed when the configuration is cleaned.
 - `EnableInjurySystem`: enables limited health-delta detection for active recruited companions; it does not infer injury from every animation or visible wound.
 - `InjuryDamageThresholdPercent`: cumulative health loss from the tracked baseline, as a percentage of max health, required to register an injury (1–50; default 10).
 - `InjuryRecoverySeconds`: injury recovery countdown in seconds (15–86400; default 180), persisted periodically.
-- `IncapacitatedHealthPercent`: health restored during an attempted incapacitation recovery (10–75; default 35).
 - `MedicineHealingPercent`: percentage of max health added by a paid treatment (1–100; default 100, capped at max health).
 - `MedicineRecoveryReductionSeconds`: recovery time removed by a treatment (0–86400; default 60).
 - `RecruitMedicineCostCents`: treatment price in cents (0–100000; default 100 = $1.00). A short per-record transaction window guards against duplicate prompt activations.
@@ -85,11 +79,11 @@ RecruitMedicineCostCents=100
 
 ## Translating extension text
 
-On first launch, the extension creates `scripts/EnRAGECompanionsExtension.texts.ini` with editable labels and messages. Change only the text after the first `=`; leave the keys unchanged. Keep placeholders such as `{0}`, `{1}`, `{2}` and `${0}` intact in formatted messages. Missing keys are appended automatically when the extension updates, and blank/invalid entries fall back to the built-in Spanish text. Restart the game/script after editing so the catalog reloads. The repository also contains `EnRAGECompanionsExtension.texts.ini.example` as a template.
+On first launch, the extension creates `scripts/EnRAGECompanionsExtension.texts.ini` with the active in-game text: contextual prompts, roster actions, subtitles, and treatment/expulsion feedback. The catalog no longer includes incapacitation/revival or combat-stance labels that are not used in-game; NPCs retain the names resolved by enRAGE. Change only the text after the first `=`; leave the keys unchanged. Keep placeholders such as `{0}`, `{1}`, `{2}` and `${0}` intact in formatted messages. Missing keys are appended automatically when the extension updates, and blank/invalid entries fall back to the built-in Spanish text. The example template is kept in sync with the runtime catalog and contains only keys currently used by the extension. Restart the game/script after editing so the catalog reloads.
 
 ## Scope and verification
 
-The roster integration now supports any already-defined enRAGE faction ID. New recruits receive an `extcomp_` ID and remain ordinary character sheets (`Story=false`); the old `extvdl_` prefix is still recognized for saves created by previous versions. When `RecruitGangId=RecruitRosterId=vdl`, records are also mirrored to the special Van der Linde `StoryRoster` and re-synchronized after loading. When a custom/normal faction ID is configured for both settings, records stay in the normal `Roster` and show in that faction's page because their `Gang` field matches its ID. The extension does not create the faction definition itself. Records are seeded through enRAGE's `RollNewLife`/`EnsureMind`/`EnsurePast` path and generated past entries are marked known. A per-session ped-handle cache and record matching prevent repeated recruitment from creating a new alias/duplicate entry. A recruit that still satisfies enRAGE's native wounded-down predicate is retained in the roster rather than replaced during recovery; if that predicate no longer applies and the ped is confirmed dead, the record is marked dead. After a full game restart the original live entity cannot be recovered from runtime cache; `Llamarlo` uses the saved model hash to create a replacement only when no matching live entity exists.
+The roster integration now supports any already-defined enRAGE faction ID. New recruits receive an `extcomp_` ID and remain ordinary character sheets (`Story=false`); the old `extvdl_` prefix is still recognized for saves created by previous versions. When `RecruitGangId=RecruitRosterId=vdl`, records are also mirrored to the special Van der Linde `StoryRoster` and re-synchronized after loading. When a custom/normal faction ID is configured for both settings, records stay in the normal `Roster` and show in that faction's page because their `Gang` field matches its ID. The extension does not create the faction definition itself. Records are seeded through enRAGE's `RollNewLife`/`EnsureMind`/`EnsurePast` path and generated past entries are marked known. A per-session ped-handle cache and record matching prevent repeated recruitment from creating a new alias/duplicate entry. Recruited NPCs use the game's ordinary damage and death behavior; confirmed deaths are marked in the roster. After a full game restart the original live entity cannot be recovered from runtime cache; `Llamarlo` uses the saved model hash to create a replacement only when no matching live entity exists.
 
 The `Llamarlo` roster action and the direct proximity hold prompt use the existing stable roster ID. A dismissed recruit can be re-adopted from nearby without opening the roster, provided that the original pedestrian still exists in the session; the extension reuses the roster record and enforces the active-companion cap. This change is implemented at source level and still needs in-game verification.
 
@@ -138,33 +132,42 @@ The example is a placeholder: replace `custom_faction_id` with the exact ID of t
 
 La rama `phase2-persistent-companion-state` añade persistencia versionada por ID de registro. No sustituye ni elimina los hooks de reclutamiento existentes.
 
-- `src/CompanionPersistentState.cs`: conserva seguimiento/espera, preferencia de montura, postura de combate, posición guardada, heridas, afinidad y orden del roster.
+- `src/CompanionPersistentState.cs`: conserva seguimiento, preferencia de montura, postura de combate, posición heredada (solo para migración), heridas, afinidad y orden del roster. Los estados antiguos de espera se migran a seguimiento.
 - `src/CompanionStateStore.cs`: carga y guardado JSON versionado, validación de valores, guardado diferido por cambios, archivo temporal, copia de respaldo y recuperación desde el último backup válido.
 - `src/CompanionStateRuntime.cs`: inicializa el almacén al arrancar el script sin introducir una referencia a `NemesisMod.dll`.
 - `src/EntryPoint.cs`: inicializa el almacén al construir el script.
 
 Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Los datos se guardan por ID estable del registro, nunca por el handle temporal del ped. El esquema nuevo es la versión 3 y sigue leyendo el esquema versionado anterior; los campos de funciones retiradas dejan de usarse y no se vuelven a guardar. El formato de desarrollo `{"Version":1,"Records":[...]}` conserva los datos antiguos de orden, postura, montura, posición, lesión y afinidad; el antiguo estado/temporizador de descanso se normaliza a seguimiento y no se migra como función activa. Si existe un archivo auxiliar de versiones anteriores, el código nuevo lo ignora y no lo elimina del disco.
 
-## Fase 3 — órdenes individuales y espera
+## Fase 3 — órdenes de espera retiradas
 
-La fase 3 reutiliza `CompanionPersistentState` y el ciclo de enRAGE en vez de sustituir el sistema de reclutamiento. Al apuntar a un compañero activo aparecen prompts contextuales:
+La orden contextual `Quédate aquí` y su alternancia `Sígueme` se han retirado después de cierres del juego reportados al activarla. La interacción manual de recuperación con E se conserva para levantar al recluta incapacitado por herida. Las claves antiguas `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se limpian del INI.
 
-- `Quédate aquí`: guarda la posición actual del compañero, lo baja del caballo si corresponde y mantiene su IA de espera separada del ciclo `WaitToJoin/Ride`. La extensión bloquea las tareas nativas `WaitToJoin` y `Ride` mientras está en espera, para que no sobrescriban el anclaje. Si sale del radio configurado, recibe una tarea para regresar al punto guardado.
-- `Sígueme`: elimina el anclaje de espera, restablece el estado persistente a `Following` y devuelve el control de movimiento al ciclo normal de enRAGE.
-- La orden de descanso se retiró después de un cierre del juego reportado al activarla. La orden `Quédate aquí` sigue disponible.
-- Los prompts de órdenes son contextuales y no se agregan botones a la ficha. En espera el wrapper permanece en `State=1` para conservar el prompt G nativo, y el controlador bloquea la tarea `Ride` que sobrescribiría la orden. La orden se guarda por ID estable; `Llamarlo` vuelve a `Following`.
+- Los registros persistidos con estado `Waiting` o `ReturningToPosition` se normalizan a `Following` al cargarse en el ciclo de compañeros, para que un NPC no quede retenido en una orden antigua.
 - Los registros nuevos y antiguos de la extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE, por lo que no sirve como origen neutral. Los registros con un contador real de muertes no se alteran.
-- La llamada desde la ficha ya no fuerza una tarea de montar al caballo después de `Adopt`; enRAGE conserva el control de sus tareas de aproximación/seguimiento.
+- La llamada desde la ficha no fuerza una tarea manual de montar al caballo después de `Adopt`; enRAGE conserva el control de sus tareas de aproximación/seguimiento.
 
 ## Fase 4 — heridas, incapacitación y remedios
 
 - Se rastrean pérdidas de salud significativas en compañeros activos y se guarda una gravedad/temporizador por ID estable. La recuperación progresa mientras el compañero está vivo y no incapacitado.
-- La incapacitación persistente se integra con `WoundedDown(Ped)` de enRAGE, que comprueba `IsIncapacitated` y el seguimiento nativo de heridas. La interacción `Ayudar a levantarse` usa `_INCAPACITATED_REVIVE` cuando el wrapper está disponible, mantiene el registro durante la recuperación y no llama a `RESURRECT_PED`. Una muerte que ya no cumple el estado de herida se registra como muerte confirmada. Tras el combate, otro recluta activo dentro del radio de búsqueda puede acercarse para ayudar automáticamente.
+- Se eliminó el sistema de incapacitación y recuperación: los reclutas ya no reciben prompts ni intentos de reanimación de la extensión. El daño y la muerte quedan en manos de RDR2/enRAGE.
+- La extensión no intercepta el estado de incapacitación ni intenta impedir la muerte cuando el recluta recibe daño letal. La retirada original de enRAGE queda bajo el control del mod.
 - El remedio usa coste, curación inmediata y reducción de recuperación configurables; excluye muertos confirmados y expulsados y aplica una ventana por registro para reducir los cobros duplicados.
 - Es una integración de código fuente con el estado de herida de enRAGE, no una reproducción idéntica de su gestor de combate. Si el ped deja de cumplir la condición de herida y se confirma una muerte real, el registro se marca como muerto; no se usa `RESURRECT_PED` para forzar una recuperación. La animación sincronizada y los wrappers de la API deben probarse en la versión instalada.
 
 ## Fase 5 — posturas de combate
 
-- El prompt de postura aparece al apuntar a un compañero activo solo cuando se detecta un NPC que está atacando al jugador. Las posturas se guardan por roster; `Fuego a mi señal` requiere un disparo actual o reciente.
+- Las claves de texto para las posturas se retiraron del catálogo porque no hay un prompt funcional que las muestre en el juego. La lógica interna de combate que use el estado guardado no se anuncia como una opción contextual disponible.
 
-Las órdenes, las heridas, la recuperación asistida y los prompts siguen siendo cambios de código fuente, sin validación dentro de RDR2. Esta revisión tampoco modifica `main` ni fusiona el PR.
+La afinidad por interacciones naturales, las heridas, la recuperación asistida y los prompts restantes son cambios de código fuente y siguen sin validación dentro de RDR2. La orden de espera y el prompt manual de E están desactivados. Esta rama no modifica `main` ni fusiona el PR.
+
+
+## Native wounded state and escape handling
+
+- The extension no longer configures native incapacitation/writhe behavior or registers recruits for a custom wound-recovery path.
+- When using Ped Damage Overhaul / PDOR, follow enRAGE's published compatibility settings: keep `scripts\\BulletImpact.ini` `[Wounds] Enabled=True`, with `PlayerDamage=1.0`, `Crippling=False` and `KillShots=False` when PDO owns damage/wound handling. For PDOR 1.38.2 with enRAGE handling survivors, set `DyingStateChance=0` and `FleeKill_Enabled=0` in `PedDamageOverhaul.ini`. See [enRAGE's compatibility notes](https://www.nexusmods.com/reddeadredemption2/mods/10967?tab=description).
+- The extension leaves enRAGE's low-health escape/death behavior unmodified by the removed incapacitation feature.
+- If enRAGE sends a recruit home or changes its companion state to GoingHome for another reason, the extension clears the recruit's faction affiliation and removes its entry from StoryRoster. The current flee/head-home task is preserved; the roster record is not permanently exiled, so the NPC may be recruited again later.
+- Manual player dismissal remains separate and retains the persistent roster record. No custom wounded recovery or paired revive native is used.
+
+These changes are source-level only. A local build and in-game validation are still required.
