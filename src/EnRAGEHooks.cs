@@ -5372,7 +5372,7 @@ namespace EnRAGECompanionsExtension
                 if (File.Exists(path))
                 {
                     string[] existingLines = File.ReadAllLines(path);
-                    // Remove only the obsolete, known extension-generated appearance settings.
+                    // Remove only obsolete, known extension-generated settings.
                     // Their behavior was removed; leave all unrelated user configuration intact.
                     string[] cleanedLines = existingLines.Where(raw =>
                     {
@@ -5389,7 +5389,8 @@ namespace EnRAGECompanionsExtension
                                !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) &&
-                               !key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase);
+                               !key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase) &&
+                               !key.Equals("IncapacitatedHealthPercent", StringComparison.OrdinalIgnoreCase);
                     }).ToArray();
                     if (cleanedLines.Length != existingLines.Length)
                     {
