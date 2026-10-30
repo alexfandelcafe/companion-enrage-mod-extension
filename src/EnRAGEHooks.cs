@@ -40,6 +40,7 @@ namespace EnRAGECompanionsExtension
         private static MethodInfo _interrogable;
         private static MethodInfo _updateInterrogation;
         private static MethodInfo _woundedDown;
+        private static MethodInfo _latestWoundReport;
         private static MethodInfo _companionFight;
         private static MethodInfo _modelFemale;
         private static bool _loggedMissingModelGender;
@@ -48,6 +49,7 @@ namespace EnRAGECompanionsExtension
         private static object _latestMainInstance;
         private static bool _installed;
         private static bool _loggedNativeIncapacitationFailure;
+        private static bool _loggedLatestWoundLookupFailure;
         private static object _askContextInstance;
         private static int _genericPrompt;
         private static int _genericPromptFor;
@@ -118,6 +120,11 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> LowHealthRideSuppressedIds =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LowHealthWoundGraceStartedAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, int> LastIncapacitationDiagnosticAtById =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private const int NativeIncapacitationGraceMilliseconds = 2000;
         private static readonly Dictionary<string, int> LastAutoAssistMoveAtByHelperId =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> RecoveryAnimationUntilById =
@@ -491,36 +498,133 @@ namespace EnRAGECompanionsExtension
                         health < (int)Math.Ceiling(maxHealth * 0.30);
                     if (belowEnRageHurtThreshold)
                     {
-                        bool nativeDown = IsNativeWoundedDown(__instance, ped);
-                        if (nativeDown)
+                        if (IsNativeWoundedDown(__instance, ped))
                         {
-                            if (!string.IsNullOrWhiteSpace(id))
-                                LowHealthRideSuppressedIds.Remove(id);
+                            ClearLowHealthIncapacitationTracking(id);
                             TryEnterIncapacitated(__instance, record, ped);
-                        }
-                        else if (!string.IsNullOrWhiteSpace(id) && LowHealthRideSuppressedIds.Add(id))
-                        {
-                            Log("Suppressed enRAGE low-health flee for recruit " + id +
-                                " until native incapacitation can take over.");
+                            return false;
                         }
 
-                        // NemesisMod.Ride sends every companion below 30% health home before
-                        // RDR2 can enter the incapacitated state. Suppress that branch for both
-                        // the pending-wound and confirmed-WoundedDown cases.
-                        if (!nativeDown)
+                        // Do not bypass enRAGE's 30% protection for every low-health recruit.
+                        // Only hold Ride when BulletImpact has a real wound AND RDR2 says the
+                        // ped is eligible for incapacitation this frame. TagVictim alone is
+                        // not a wound report and must never disable enRAGE's escape fallback.
+                        bool hasLatestWound = HasLatestWoundReport(__instance, ped);
+                        if (!hasLatestWound || string.IsNullOrWhiteSpace(id))
+                        {
+                            ClearLowHealthIncapacitationTracking(id);
+                            return true; // Run enRAGE's original invincible / flee / head-home branch.
+                        }
+
+                        int now = Game.GameTime;
+                        int graceStartedAt;
+                        if (!LowHealthWoundGraceStartedAtById.TryGetValue(id, out graceStartedAt))
+                        {
+                            graceStartedAt = now;
+                            LowHealthWoundGraceStartedAtById[id] = graceStartedAt;
+                            LowHealthRideSuppressedIds.Add(id);
+                            Log("Recruit " + id + " has a BulletImpact wound below 30% health; checking native incapacitation eligibility before enRAGE's escape fallback.");
+                        }
+
+                        bool canBeIncapacitatedThisFrame = CanBeIncapacitatedThisFrame(ped);
+                        LogNativeIncapacitationDiagnostics(id, ped, hasLatestWound, canBeIncapacitatedThisFrame);
+
+                        if (canBeIncapacitatedThisFrame &&
+                            now - graceStartedAt <= NativeIncapacitationGraceMilliseconds)
                         {
                             Ped player = __args.Length > 1 ? __args[1] as Ped : null;
                             if (player != null && player.Exists())
                                 InvokeInstance(__instance, "CompanionFight", companion, player);
+                            return false;
                         }
-                        return false;
+
+                        ClearLowHealthIncapacitationTracking(id);
+                        Log("Recruit " + id + " did not enter native WoundedDown during the short eligibility window; restoring enRAGE's protected escape instead of leaving the recruit exposed.");
+                        return true;
                     }
-                    if (!string.IsNullOrWhiteSpace(id))
-                        LowHealthRideSuppressedIds.Remove(id);
+
+                    ClearLowHealthIncapacitationTracking(id);
                 }
             }
             catch (Exception ex) { Log("Companion movement order guard warning: " + Unwrap(ex)); }
             return true;
+        }
+
+        private static void ClearLowHealthIncapacitationTracking(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            LowHealthRideSuppressedIds.Remove(id);
+            LowHealthWoundGraceStartedAtById.Remove(id);
+            LastIncapacitationDiagnosticAtById.Remove(id);
+        }
+
+        private static bool HasLatestWoundReport(object instance, Ped ped)
+        {
+            if (ped == null || !ped.Exists()) return false;
+            object bulletImpact = GetField(instance ?? _latestMainInstance, "_bulletImpact");
+            if (bulletImpact == null) return false;
+            try
+            {
+                if (_latestWoundReport == null)
+                    _latestWoundReport = FindMethod(bulletImpact.GetType(), "LatestWound", 1,
+                        p => p[0].ParameterType == typeof(int));
+                if (_latestWoundReport == null) return false;
+                return _latestWoundReport.Invoke(bulletImpact, new object[] { ped.Handle }) != null;
+            }
+            catch (Exception ex)
+            {
+                if (!_loggedLatestWoundLookupFailure)
+                {
+                    _loggedLatestWoundLookupFailure = true;
+                    Log("Could not inspect enRAGE BulletImpact.LatestWound: " + Unwrap(ex));
+                }
+                return false;
+            }
+        }
+
+        private static bool CanBeIncapacitatedThisFrame(Ped ped)
+        {
+            if (ped == null || !ped.Exists()) return false;
+            try
+            {
+                return Function.Call<bool>(0x7A4E00364B5D727BUL,
+                    new InputArgument[] { ped.Handle });
+            }
+            catch { return false; }
+        }
+
+        private static int NativeIncapacitationHealth(Ped ped)
+        {
+            if (ped == null || !ped.Exists()) return -1;
+            try
+            {
+                return Function.Call<int>(0x89BFDF6D53145545UL,
+                    new InputArgument[] { ped.Handle });
+            }
+            catch { return -1; }
+        }
+
+        private static void LogNativeIncapacitationDiagnostics(string id, Ped ped,
+            bool hasLatestWound, bool canBeIncapacitatedThisFrame)
+        {
+            if (string.IsNullOrWhiteSpace(id) || ped == null || !ped.Exists()) return;
+            int now = Game.GameTime;
+            int last;
+            if (LastIncapacitationDiagnosticAtById.TryGetValue(id, out last) && now - last < 1000)
+                return;
+            LastIncapacitationDiagnosticAtById[id] = now;
+
+            int health = -1, maxHealth = -1;
+            try { health = ped.Health; } catch { }
+            try { maxHealth = ped.MaxHealth; } catch { }
+            bool nativeDown = false;
+            try { nativeDown = ped.IsIncapacitated; } catch { }
+            Log("Incapacitation check " + id +
+                ": health=" + health + "/" + maxHealth +
+                ", nativeIncapacitationHealth=" + NativeIncapacitationHealth(ped) +
+                ", canBeIncapacitatedThisFrame=" + canBeIncapacitatedThisFrame +
+                ", IsIncapacitated=" + nativeDown +
+                ", LatestWound=" + hasLatestWound + ".");
         }
 
         private static void EnableNativeIncapacitation(Ped ped)
@@ -4722,7 +4826,7 @@ namespace EnRAGECompanionsExtension
                     if (_genericPromptFor == cachedHandle) HideGenericRecruitPrompt();
                 }
                 RecruitedRosterModels.Remove(id);
-                LowHealthRideSuppressedIds.Remove(id);
+                ClearLowHealthIncapacitationTracking(id);
                 LastObservedHealthById.Remove(id);
                 LastDamageBaselineById.Remove(id);
                 LastDamageAtById.Remove(id);
@@ -4837,7 +4941,7 @@ namespace EnRAGECompanionsExtension
             LastDamageAtById.Remove(dismissedId);
             LastHealthSampleAtById.Remove(dismissedId);
             LastInjuryRecoveryAtById.Remove(dismissedId);
-            LowHealthRideSuppressedIds.Remove(dismissedId);
+            ClearLowHealthIncapacitationTracking(dismissedId);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
@@ -4901,6 +5005,11 @@ namespace EnRAGECompanionsExtension
             if (ped == null || !ped.Exists() || ped.IsDead) return;
 
             EnableNativeIncapacitation(ped);
+            // Ride's original 30% health branch owns invincibility while a companion is
+            // fleeing or heading home. Do not clear that protection after allowing Ride to run.
+            if (GetFieldInt(companion, "State", -1) == 2)
+                return;
+
             CompanionPersistentState persistent = GetPersistentState(GetField(companion, "Rec"), false);
             bool isPersistentlyIncapacitated = persistent != null && persistent.Injury != null &&
                 persistent.Injury.IsIncapacitated;
