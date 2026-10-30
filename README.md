@@ -159,3 +159,13 @@ La orden contextual `Quédate aquí` y su alternancia `Sígueme` se han retirado
 - El prompt de postura aparece al apuntar a un compañero activo solo cuando se detecta un NPC que está atacando al jugador. Las posturas se guardan por roster; `Fuego a mi señal` requiere un disparo actual o reciente.
 
 La afinidad por interacciones naturales, las heridas, la recuperación asistida y los prompts restantes son cambios de código fuente y siguen sin validación dentro de RDR2. La orden de espera y el prompt manual de E están desactivados. Esta rama no modifica `main` ni fusiona el PR.
+
+
+## Native wounded state and escape handling
+
+- Recruited peds are configured to use RDR2's native incapacitation (SET_PED_CAN_BE_INCAPACITATED) and fatal-wound/writhe behavior (the ScriptHook CanWrithe equivalent, config flag 281 set to false). The extension also registers each recruit with enRAGE's BulletImpact.TagVictim, so enRAGE's WoundedDown(Ped) can evaluate the recruit against its own wound reports.
+- The extension suppresses enRAGE's hard-coded Ride departure branch below 30% health while the ped has not yet entered native WoundedDown. It does not fabricate a knockdown animation, set health, or convert an ordinary death into a wound.
+- If enRAGE sends a recruit home or changes its companion state to GoingHome for another reason, the extension clears the recruit's faction affiliation and removes its entry from StoryRoster. The current flee/head-home task is preserved; the roster record is not permanently exiled, so the NPC may be recruited again later.
+- Manual player dismissal remains separate and retains the persistent roster record. Native wounded recovery continues to use the enRAGE WoundedDown predicate and the paired RDR2 revive native.
+
+These changes are source-level only. A local build and in-game validation are still required, particularly to confirm that the installed game/enRAGE version records a wound for each supported damage source and enters WoundedDown rather than killing the recruit outright.
