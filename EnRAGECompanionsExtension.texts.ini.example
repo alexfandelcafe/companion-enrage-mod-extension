@@ -1,7 +1,6 @@
-; EnRAGE Companions Extension — translation template
-; Only text visible in-game that is currently used by the extension is listed here.
-; Edit only the value after the first '='; keep every key unchanged.
-; Preserve format placeholders such as {0}, {1}, {2}, and ${0}.
+; EnRAGE Companions Extension — active in-game translations
+; Edit only the value after the first '='; do not change keys.
+; Keep format placeholders such as {0}, {1}, {2}, and ${0} intact.
 ; Missing or blank values use the built-in Spanish fallback. Restart the script after editing.
 
 action.call=Llamarlo
@@ -39,20 +38,7 @@ recruit.success.adopted={0} ha vuelto y vuelve a seguirte.
 recruit.success.approaching={0} fue llamado y se acerca para seguirte.
 companion.default=Tu compañero
 companion.ally=Tu aliado
-companion.generated_name=Aliado {0}
 companion.dismissed={0} deja de seguirte y vuelve a comportarse como un NPC del mundo.
 companion.escaped={0} huyó y dejó de formar parte de tu banda.
 companion.recruited={0} ahora combate de tu lado.
-injury.detected={0} está herido. Un remedio ayudará a recuperarlo.
-incapacitated.only_help=Está incapacitado por una herida. Apúntale y mantén E para ayudarlo a levantarse.
-incapacitated.prompt=Ayudar a levantarse
-incapacitated.revive_unavailable=No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado.
-incapacitated.entered={0} ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse.
-stance.prefix=Postura: {0}
-stance.hold=Mantener posición
-stance.cover=Cubrir al jugador
-stance.defend=Defender la zona
-stance.fire=Fuego a mi señal
-stance.follow=Seguir órdenes
-stance.changed={0}: postura {1}.
 prompt.medicine=Dar remedio (${0})
