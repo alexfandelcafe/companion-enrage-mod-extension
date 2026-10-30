@@ -1400,17 +1400,6 @@ namespace EnRAGECompanionsExtension
                 if (!activeIds.Contains(id)) AffinityTravelTrackers.Remove(id);
         }
 
-        private static void AdjustAffinityFromRoster(object instance, object record, int delta)
-        {
-            int affinity = ChangeAffinity(record, delta);
-            if (affinity < 0)
-            {
-                InvokeInstance(instance, "ShowSubtitle", "La afinidad está desactivada en el archivo INI.");
-                return;
-            }
-            string name = GetMember(record, "Name") as string ?? T("companion.default");
-            InvokeInstance(instance, "ShowSubtitle", TF("affinity.status", name, affinity));
-        }
         private static void DetailActionsPostfix(object __instance, ref List<string> __result)
         {
             try
@@ -1509,7 +1498,7 @@ namespace EnRAGECompanionsExtension
                 if (string.Equals(id, _pendingKickRosterRecordId, StringComparison.OrdinalIgnoreCase))
                 {
                     _pendingKickRosterRecordId = null;
-                    InvokeInstance(_latestMainInstance, "ShowSubtitle", "Expulsión cancelada.");
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.kick.cancelled"));
                 }
             }
             catch (Exception ex) { Log("Roster confirmation navigation warning: " + Unwrap(ex)); }
@@ -1550,7 +1539,7 @@ namespace EnRAGECompanionsExtension
                 {
                     if (alreadyFollowing)
                     {
-                        InvokeInstance(_latestMainInstance, "ShowSubtitle", "Ese miembro ya te está siguiendo.");
+                        InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.already_following"));
                         return false;
                     }
                     CallRecruitedRosterMember(_latestMainInstance, __instance, record);
@@ -1560,7 +1549,7 @@ namespace EnRAGECompanionsExtension
                     return true;
                 if (anyCompanionFollowing && (action == T("action.kick") || action == T("action.kick.confirm")))
                 {
-                    InvokeInstance(_latestMainInstance, "ShowSubtitle", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero.");
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.cannot_kick_following"));
                     return false;
                 }
 
@@ -1579,7 +1568,7 @@ namespace EnRAGECompanionsExtension
                 {
                     if (!string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                     {
-                        InvokeInstance(_latestMainInstance, "ShowSubtitle", "La confirmación ya no es válida. Vuelve a seleccionar la expulsión.");
+                        InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.kick.invalid"));
                         return false;
                     }
                     ExpelRosterMember(_latestMainInstance, record);
@@ -1592,7 +1581,7 @@ namespace EnRAGECompanionsExtension
                 {
                     _pendingKickRosterRecordId = null;
                     SetField(__instance, "_action", 0);
-                    InvokeInstance(_latestMainInstance, "ShowSubtitle", "Expulsión cancelada.");
+                    InvokeInstance(_latestMainInstance, "ShowSubtitle", T("subtitle.kick.cancelled"));
                     return false;
                 }
             }
@@ -1733,7 +1722,7 @@ namespace EnRAGECompanionsExtension
             }
             if (GetMember(record, "IsAlive") is bool alive && !alive)
             {
-                InvokeInstance(instance, "ShowSubtitle", "No puedes curar a un miembro fallecido del roster.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.dead"));
                 return;
             }
 
@@ -1746,7 +1735,7 @@ namespace EnRAGECompanionsExtension
                 targetedCache == null || targetedCache.Record == null ||
                 !string.Equals(GetMember(targetedCache.Record, "Id") as string, id, StringComparison.OrdinalIgnoreCase))
             {
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo identificar al recluta apuntado; no se cobró el remedio.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.target.invalid"));
                 return;
             }
 
@@ -1767,7 +1756,7 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex)
             {
                 Log("Medicine cash balance read failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo comprobar el dinero disponible.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.cash.check_failed"));
                 return;
             }
             if (cash < _recruitMedicineCostCents)
@@ -1782,7 +1771,7 @@ namespace EnRAGECompanionsExtension
             if (LastMedicineTransactionAt.TryGetValue(id, out lastTransaction) &&
                 now >= lastTransaction && now - lastTransaction < 2000)
             {
-                InvokeInstance(instance, "ShowSubtitle", "El remedio ya se está procesando; no se cobró otra vez.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.processing"));
                 return;
             }
             // Claim this record before debiting cash. If a duplicate prompt fires while the native
@@ -1792,7 +1781,7 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex)
             {
                 Log("Medicine payment failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo confirmar el cobro; espera un momento antes de volver a intentarlo.");
+                InvokeInstance(instance, "ShowSubtitle", T("medicine.charge_failed"));
                 return;
             }
 
@@ -1803,8 +1792,8 @@ namespace EnRAGECompanionsExtension
             {
                 bool refunded = TryRefundMedicineCharge(_recruitMedicineCostCents);
                 InvokeInstance(instance, "ShowSubtitle", refunded
-                    ? "El remedio no pudo aplicarse; se devolvió el cobro."
-                    : "El remedio no pudo aplicarse y no se pudo confirmar la devolución. Revisa el registro del mod.");
+                    ? T("medicine.failed_refunded")
+                    : T("medicine.failed_refund_failed"));
                 if (!refunded)
                     Log("CRITICAL: medicine treatment failed and refund could not be confirmed for " + id + ".");
                 return;
@@ -2019,7 +2008,7 @@ namespace EnRAGECompanionsExtension
             catch (Exception ex)
             {
                 Log("Expelling roster member failed: " + Unwrap(ex));
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo completar la expulsión. Revisa el registro de la extensión.");
+                InvokeInstance(instance, "ShowSubtitle", T("kick.failed"));
             }
         }
 
@@ -2099,7 +2088,7 @@ namespace EnRAGECompanionsExtension
             if (modelHash == 0U) modelHash = ConvertToUInt32(GetMember(record, "ModelHash"));
             if (modelHash == 0U)
             {
-                InvokeInstance(instance, "ShowSubtitle", "No se pudo recuperar el modelo de este miembro.");
+                InvokeInstance(instance, "ShowSubtitle", T("roster.model_missing"));
                 return;
             }
             if (GetMember(record, "IsAlive") is bool isAlive && !isAlive)
@@ -2122,7 +2111,7 @@ namespace EnRAGECompanionsExtension
             }
             if (CountActiveCompanions(instance) >= _maxCompanions)
             {
-                InvokeInstance(instance, "ShowSubtitle", "No puedes llevar más compañeros ahora.");
+                InvokeInstance(instance, "ShowSubtitle", T("recruit.limit"));
                 return;
             }
 
@@ -3190,7 +3179,7 @@ namespace EnRAGECompanionsExtension
                 // Apply the configured total limit to enRAGE's original story-companion path too.
                 if (CountActiveCompanions(__instance) >= _maxCompanions)
                 {
-                    InvokeInstance(__instance, "ShowSubtitle", "No puedes llevar más compañeros ahora.");
+                    InvokeInstance(__instance, "ShowSubtitle", T("recruit.limit"));
                     return false;
                 }
                 return true;
@@ -3230,7 +3219,7 @@ namespace EnRAGECompanionsExtension
                 return;
             if (!IsMalePed(ped))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "Solo puedes reclutar NPC masculinos.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.male_only"));
                 return;
             }
             if (!IsConfiguredRecruitmentFactionAvailable())
@@ -3243,7 +3232,7 @@ namespace EnRAGECompanionsExtension
             IList comps = GetField(__instance, "_comps") as IList;
             if (comps == null || CountActiveCompanions(__instance) >= _maxCompanions || AlreadyCompanion(comps, ped.Handle))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "No puedes llevar más compañeros ahora.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.limit"));
                 return;
             }
 
@@ -3256,13 +3245,13 @@ namespace EnRAGECompanionsExtension
             if (RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cachedPedRecord) && cachedPedRecord != null && cachedPedRecord.Record != null &&
                 ExiledRosterIds.Contains(GetMember(cachedPedRecord.Record, "Id") as string))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "Este NPC fue expulsado permanentemente y no puede volver a ser reclutado.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.exiled"));
                 return;
             }
             string trackedRecordId = GetMember(trackedRecord, "Id") as string;
             if (!string.IsNullOrWhiteSpace(trackedRecordId) && ExiledRosterIds.Contains(trackedRecordId))
             {
-                InvokeInstance(__instance, "ShowSubtitle", "Este NPC fue expulsado permanentemente y no puede volver a ser reclutado.");
+                InvokeInstance(__instance, "ShowSubtitle", T("recruit.exiled"));
                 return;
             }
             bool newlyCreatedRosterRecord = false;
@@ -3282,7 +3271,7 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(name))
                 name = FindRecordName(__instance, ped.Handle);
             if (string.IsNullOrWhiteSpace(name))
-                name = "Aliado " + (CountActiveCompanions(__instance) + 1);
+                name = TF("companion.generated_name", CountActiveCompanions(__instance) + 1);
 
             object companion = null;
             bool added = false;
@@ -4524,11 +4513,11 @@ namespace EnRAGECompanionsExtension
 
             for (int i = 1; i <= 9999; i++)
             {
-                string candidate = "Aliado " + i;
+                string candidate = TF("companion.generated_name", i);
                 if (!RosterNameExists(instance, candidate))
                     return candidate;
             }
-            return "Aliado " + Guid.NewGuid().ToString("N").Substring(0, 6);
+            return TF("companion.generated_name", Guid.NewGuid().ToString("N").Substring(0, 6));
         }
 
         private static bool RosterNameExists(object instance, string name)
@@ -4884,7 +4873,7 @@ namespace EnRAGECompanionsExtension
             if (persistent != null && persistent.Injury != null && persistent.Injury.IsIncapacitated)
                 return false;
 
-            string name = GetMember(record, "Name") as string ?? GetField(companion, "Name") as string ?? "Tu aliado";
+            string name = GetMember(record, "Name") as string ?? GetField(companion, "Name") as string ?? T("companion.ally");
             Ped horse = GetField(companion, "Horse") as Ped;
 
             UnregisterEscapedRosterMember(instance, record);
@@ -4926,7 +4915,7 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(instance, "ShowSubtitle", T("incapacitated.only_help"));
                 return;
             }
-            string name = GetField(companion, "Name") as string ?? "Tu aliado";
+            string name = GetField(companion, "Name") as string ?? T("companion.ally");
             string key = GetField(companion, "Key") as string;
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
@@ -5614,16 +5603,11 @@ namespace EnRAGECompanionsExtension
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                { "affinity.disabled", "La afinidad está desactivada en el archivo INI." },
-                { "affinity.status", "{0}: afinidad {1}/100." },
-                { "affinity.meter", "AFINIDAD {0}/100" },
                 { "action.call", "Llamarlo" },
                 { "action.dismiss", "Dejar de seguirme" },
                 { "action.kick", "Echar de la banda" },
                 { "action.kick.confirm", "Confirmar expulsión" },
                 { "action.kick.cancel", "Cancelar expulsión" },
-                { "action.affinity.increase", "Mejorar afinidad (+10)" },
-                { "action.affinity.decrease", "Reducir afinidad (-10)" },
                 { "subtitle.kick.cancelled", "Expulsión cancelada." },
                 { "subtitle.already_following", "Ese miembro ya te está siguiendo." },
                 { "subtitle.cannot_kick_following", "No puedes expulsar a un compañero que te está siguiendo. Despídelo primero." },
@@ -5654,6 +5638,7 @@ namespace EnRAGECompanionsExtension
                 { "recruit.success.approaching", "{0} fue llamado y se acerca para seguirte." },
                 { "companion.default", "Tu compañero" },
                 { "companion.ally", "Tu aliado" },
+                { "companion.generated_name", "Aliado {0}" },
                 { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
                 { "companion.escaped", "{0} huyó y dejó de formar parte de tu banda." },
                 { "companion.recruited", "{0} ahora combate de tu lado." },
@@ -5661,11 +5646,7 @@ namespace EnRAGECompanionsExtension
                 { "incapacitated.only_help", "Está incapacitado por una herida. Apúntale y mantén E para ayudarlo a levantarse." },
                 { "incapacitated.prompt", "Ayudar a levantarse" },
                 { "incapacitated.revive_unavailable", "No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado." },
-                { "incapacitated.health_failed", "No se pudo restaurar la salud; el compañero sigue incapacitado." },
-                { "incapacitated.still_down", "El compañero todavía no puede levantarse; sigue incapacitado." },
-                { "incapacitated.verify_failed", "No se pudo verificar la recuperación; el compañero sigue incapacitado." },
                 { "incapacitated.entered", "{0} ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse." },
-                { "incapacitated.helped", "{0} se ha levantado. La herida seguirá recuperándose con el tiempo." },
                 { "stance.prefix", "Postura: {0}" },
                 { "stance.hold", "Mantener posición" },
                 { "stance.cover", "Cubrir al jugador" },
