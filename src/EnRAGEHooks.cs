@@ -1545,7 +1545,7 @@ namespace EnRAGECompanionsExtension
             {
                 injuryState.Injury.RecoverySecondsRemaining = Math.Max(0,
                     injuryState.Injury.RecoverySecondsRemaining - _medicineRecoveryReductionSeconds);
-                if (injuryState.Injury.RecoverySecondsRemaining <= 0 && !injuryState.Injury.IsIncapacitated)
+                if (injuryState.Injury.RecoverySecondsRemaining <= 0)
                 {
                     injuryState.Injury.IsInjured = false;
                     injuryState.Injury.Severity = 0;
@@ -1702,7 +1702,6 @@ namespace EnRAGECompanionsExtension
 
             ExiledRosterIds.Add(id);
             HideIndividualOrderPrompts();
-            HideIncapacitatedPrompt();
             HideRecruitMedicinePrompt();
             HideCombatStancePrompt();
             SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
@@ -2258,7 +2257,7 @@ namespace EnRAGECompanionsExtension
                 _preferredGenericPed = null;
                 if (candidate == null && !hasPreferredTarget)
                     candidate = FindCandidate(instance, player);
-                if (candidate == null || !candidate.Exists() || IsPedIncapacitatedRecruit(candidate))
+                if (candidate == null || !candidate.Exists())
                 {
                     HideGenericRecruitPrompt();
                     return;
@@ -2642,7 +2641,10 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(name))
                 name = FindRecordName(__instance, ped.Handle);
             if (string.IsNullOrWhiteSpace(name))
-                name = TF("companion.generated_name", CountActiveCompanions(__instance) + 1);
+            {
+                Log("Recruitment skipped because enRAGE did not provide a name for ped " + ped.Handle + ".");
+                return;
+            }
 
             object companion = null;
             bool added = false;
@@ -2727,16 +2729,6 @@ namespace EnRAGECompanionsExtension
                 return true;
 
             object record = GetField(companion, "Rec");
-            CompanionPersistentState savedState = GetPersistentState(record, false);
-            if (savedState != null && savedState.Injury != null && savedState.Injury.IsIncapacitated)
-            {
-                // An incapacitated recruit keeps the same roster identity. Do not let enRAGE's
-                // missing/dead-ped recovery path spawn a fresh body and detach it from the band.
-                SetField(companion, "State", 0);
-                __result = false;
-                return false;
-            }
-
             Ped player = __args[1] as Ped;
             uint modelHash;
             if (player == null || !player.Exists() || !ModelHashes.TryGetValue(key, out modelHash))
@@ -4088,7 +4080,6 @@ namespace EnRAGECompanionsExtension
                 CustomCombatSuppressedAt.Remove(handle);
                 AmbientReleasedRecruitPeds.Remove(handle);
                 AmbientReleasedWanderAt.Remove(handle);
-                if (_incapacitatedPromptFor == handle) HideIncapacitatedPrompt();
                 if (_medicinePromptFor == handle) HideRecruitMedicinePrompt();
                 if (_combatStancePromptFor == handle) HideCombatStancePrompt();
                 if (_genericPromptFor == handle) HideGenericRecruitPrompt();
@@ -4107,7 +4098,6 @@ namespace EnRAGECompanionsExtension
                     CustomCombatSuppressedAt.Remove(cachedHandle);
                     AmbientReleasedRecruitPeds.Remove(cachedHandle);
                     AmbientReleasedWanderAt.Remove(cachedHandle);
-                    if (_incapacitatedPromptFor == cachedHandle) HideIncapacitatedPrompt();
                     if (_medicinePromptFor == cachedHandle) HideRecruitMedicinePrompt();
                     if (_combatStancePromptFor == cachedHandle) HideCombatStancePrompt();
                     if (_genericPromptFor == cachedHandle) HideGenericRecruitPrompt();
@@ -4120,8 +4110,6 @@ namespace EnRAGECompanionsExtension
                 LastHealthSampleAtById.Remove(id);
                 LastInjuryRecoveryAtById.Remove(id);
                 LastInjuryPersistAtById.Remove(id);
-                LastAutoAssistAtById.Remove(id);
-                RecoveryAnimationUntilById.Remove(id);
                 foreach (string helperId in AutoAssistTargetByHelperId
                     .Where(pair => string.Equals(pair.Value, id, StringComparison.OrdinalIgnoreCase))
                     .Select(pair => pair.Key).ToArray())
@@ -4347,7 +4335,7 @@ namespace EnRAGECompanionsExtension
         private static void RecoverInjuryOverTime(string id, CompanionPersistentState state, int now)
         {
             if (!_enableInjurySystem || state == null || state.Injury == null ||
-                !state.Injury.IsInjured || state.Injury.IsIncapacitated)
+                !state.Injury.IsInjured)
             {
                 LastInjuryRecoveryAtById[id] = now;
                 return;
@@ -4676,15 +4664,10 @@ namespace EnRAGECompanionsExtension
                 { "recruit.success.approaching", "{0} fue llamado y se acerca para seguirte." },
                 { "companion.default", "Tu compañero" },
                 { "companion.ally", "Tu aliado" },
-                { "companion.generated_name", "Aliado {0}" },
                 { "companion.dismissed", "{0} deja de seguirte y vuelve a comportarse como un NPC del mundo." },
                 { "companion.escaped", "{0} huyó y dejó de formar parte de tu banda." },
                 { "companion.recruited", "{0} ahora combate de tu lado." },
                 { "injury.detected", "{0} está herido. Un remedio ayudará a recuperarlo." },
-                { "incapacitated.only_help", "Está incapacitado por una herida. Apúntale y mantén E para ayudarlo a levantarse." },
-                { "incapacitated.prompt", "Ayudar a levantarse" },
-                { "incapacitated.revive_unavailable", "No se pudo iniciar la recuperación por herida. El recluta sigue incapacitado." },
-                { "incapacitated.entered", "{0} ha quedado incapacitado. Apúntale y mantén E para ayudarlo a levantarse." },
                 { "stance.prefix", "Postura: {0}" },
                 { "stance.hold", "Mantener posición" },
                 { "stance.cover", "Cubrir al jugador" },
@@ -4808,8 +4791,7 @@ namespace EnRAGECompanionsExtension
                                !key.Equals("RestHealsInjuries", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("EnableIndividualOrders", StringComparison.OrdinalIgnoreCase) &&
                                !key.Equals("EnableWaitMode", StringComparison.OrdinalIgnoreCase) &&
-                               !key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase) &&
-                               !key.Equals("IncapacitatedHealthPercent", StringComparison.OrdinalIgnoreCase);
+                               !key.Equals("WaitRadius", StringComparison.OrdinalIgnoreCase);
                     }).ToArray();
                     if (cleanedLines.Length != existingLines.Length)
                     {
