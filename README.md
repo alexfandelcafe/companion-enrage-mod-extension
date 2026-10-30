@@ -83,7 +83,7 @@ On first launch, the extension creates `scripts/EnRAGECompanionsExtension.texts.
 
 ## Scope and verification
 
-The roster integration now supports any already-defined enRAGE faction ID. New recruits receive an `extcomp_` ID and remain ordinary character sheets (`Story=false`); the old `extvdl_` prefix is still recognized for saves created by previous versions. When `RecruitGangId=RecruitRosterId=vdl`, records are also mirrored to the special Van der Linde `StoryRoster` and re-synchronized after loading. When a custom/normal faction ID is configured for both settings, records stay in the normal `Roster` and show in that faction's page because their `Gang` field matches its ID. The extension does not create the faction definition itself. Records are seeded through enRAGE's `RollNewLife`/`EnsureMind`/`EnsurePast` path and generated past entries are marked known. A per-session ped-handle cache and record matching prevent repeated recruitment from creating a new alias/duplicate entry. Recruited NPCs use the game's ordinary damage and death behavior; confirmed deaths are marked in the roster. After a full game restart the original live entity cannot be recovered from runtime cache; `Llamarlo` uses the saved model hash to create a replacement only when no matching live entity exists.
+The roster integration now supports any already-defined enRAGE faction ID. New recruits receive an `extcomp_` ID and remain ordinary character sheets (`Story=false`); the old `extvdl_` prefix is still recognized for saves created by previous versions. When `RecruitGangId=RecruitRosterId=vdl`, records are also mirrored to the special Van der Linde `StoryRoster` and re-synchronized after loading. When a custom/normal faction ID is configured for both settings, records stay in the normal `Roster` and show in that faction's page because their `Gang` field matches its ID. The extension does not create the faction definition itself. Records are seeded through enRAGE's `RollNewLife`/`EnsureMind`/`EnsurePast` path and generated past entries are marked known. A per-session ped-handle cache and record matching prevent repeated recruitment from creating a new alias/duplicate entry. Recruited NPCs use the game's ordinary damage and death behavior; confirmed deaths are marked in the roster. After a full game restart the original live entity cannot be recovered from runtime cache; `Llamarlo` may create a replacement only for a roster record still marked alive. Dead records remain dead and are not respawned.
 
 The `Llamarlo` roster action and the direct proximity hold prompt use the existing stable roster ID. A dismissed recruit can be re-adopted from nearby without opening the roster, provided that the original pedestrian still exists in the session; the extension reuses the roster record and enforces the active-companion cap. This change is implemented at source level and still needs in-game verification.
 
@@ -141,25 +141,25 @@ Archivo de ejecución: `scripts/EnRAGECompanionsExtension.companions.json`. Los 
 
 ## Fase 3 — órdenes de espera retiradas
 
-La orden contextual `Quédate aquí` y su alternancia `Sígueme` se han retirado después de cierres del juego reportados al activarla. La interacción manual de recuperación con E se conserva para levantar al recluta incapacitado por herida. Las claves antiguas `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se limpian del INI.
+La orden contextual `Quédate aquí` y su alternancia `Sígueme` se retiraron después de cierres del juego reportados al activarlas. El prompt manual de recuperación con E también está retirado: los reclutas permanecen bajo el comportamiento normal de daño, huida y muerte de RDR2/enRAGE. Las claves antiguas `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se limpian del INI.
 
 - Los registros persistidos con estado `Waiting` o `ReturningToPosition` se normalizan a `Following` al cargarse en el ciclo de compañeros, para que un NPC no quede retenido en una orden antigua.
 - Los registros nuevos y antiguos de la extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE, por lo que no sirve como origen neutral. Los registros con un contador real de muertes no se alteran.
 - La llamada desde la ficha no fuerza una tarea manual de montar al caballo después de `Adopt`; enRAGE conserva el control de sus tareas de aproximación/seguimiento.
 
-## Fase 4 — heridas, incapacitación y remedios
+## Fase 4 — heridas y remedios
 
-- Se rastrean pérdidas de salud significativas en compañeros activos y se guarda una gravedad/temporizador por ID estable. La recuperación progresa mientras el compañero está vivo y no incapacitado.
+- Se rastrean pérdidas de salud significativas en compañeros activos y se guarda una gravedad/temporizador por ID estable. La recuperación de la herida progresa mientras el compañero está vivo.
 - Se eliminó el sistema de incapacitación y recuperación: los reclutas ya no reciben prompts ni intentos de reanimación de la extensión. El daño y la muerte quedan en manos de RDR2/enRAGE.
 - La extensión no intercepta el estado de incapacitación ni intenta impedir la muerte cuando el recluta recibe daño letal. La retirada original de enRAGE queda bajo el control del mod.
 - El remedio usa coste, curación inmediata y reducción de recuperación configurables; excluye muertos confirmados y expulsados y aplica una ventana por registro para reducir los cobros duplicados.
-- Es una integración de código fuente con el estado de herida de enRAGE, no una reproducción idéntica de su gestor de combate. Si el ped deja de cumplir la condición de herida y se confirma una muerte real, el registro se marca como muerto; no se usa `RESURRECT_PED` para forzar una recuperación. La animación sincronizada y los wrappers de la API deben probarse en la versión instalada.
+- El registro del roster se marca como fallecido cuando el ped muere. La extensión no ejecuta una recuperación forzada ni invoca `RESURRECT_PED`; el remedio solo puede aplicarse a un recluta vivo.
 
 ## Fase 5 — posturas de combate
 
 - Las claves de texto para las posturas se retiraron del catálogo porque no hay un prompt funcional que las muestre en el juego. La lógica interna de combate que use el estado guardado no se anuncia como una opción contextual disponible.
 
-La afinidad por interacciones naturales, las heridas, la recuperación asistida y los prompts restantes son cambios de código fuente y siguen sin validación dentro de RDR2. La orden de espera y el prompt manual de E están desactivados. Esta rama no modifica `main` ni fusiona el PR.
+La afinidad por interacciones naturales, el seguimiento de heridas, los remedios y los prompts restantes son cambios de código fuente y siguen sin validación dentro de RDR2. La orden de espera y el prompt manual de E están desactivados. Esta rama no modifica `main` ni fusiona el PR.
 
 
 ## Native wounded state and escape handling
