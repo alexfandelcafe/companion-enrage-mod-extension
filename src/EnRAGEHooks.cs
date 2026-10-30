@@ -510,9 +510,14 @@ namespace EnRAGECompanionsExtension
                         // ped is eligible for incapacitation this frame. TagVictim alone is
                         // not a wound report and must never disable enRAGE's escape fallback.
                         bool hasLatestWound = HasLatestWoundReport(__instance, ped);
+                        bool canBeIncapacitatedThisFrame = CanBeIncapacitatedThisFrame(ped);
+                        LogNativeIncapacitationDiagnostics(id, ped, hasLatestWound, canBeIncapacitatedThisFrame);
+
                         if (!hasLatestWound || string.IsNullOrWhiteSpace(id))
                         {
                             ClearLowHealthIncapacitationTracking(id);
+                            if (!string.IsNullOrWhiteSpace(id) && LowHealthRideSuppressedIds.Add(id))
+                                Log("Recruit " + id + " has no BulletImpact LatestWound report at low health; using enRAGE's protected escape.");
                             return true; // Run enRAGE's original invincible / flee / head-home branch.
                         }
 
@@ -525,9 +530,6 @@ namespace EnRAGECompanionsExtension
                             LowHealthRideSuppressedIds.Add(id);
                             Log("Recruit " + id + " has a BulletImpact wound below 30% health; checking native incapacitation eligibility before enRAGE's escape fallback.");
                         }
-
-                        bool canBeIncapacitatedThisFrame = CanBeIncapacitatedThisFrame(ped);
-                        LogNativeIncapacitationDiagnostics(id, ped, hasLatestWound, canBeIncapacitatedThisFrame);
 
                         if (canBeIncapacitatedThisFrame &&
                             now - graceStartedAt <= NativeIncapacitationGraceMilliseconds)
