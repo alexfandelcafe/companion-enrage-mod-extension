@@ -2436,7 +2436,6 @@ namespace EnRAGECompanionsExtension
                     return;
                 }
 
-                CompanionPersistentState state = GetPersistentState(cached.Record, true);
                 string targetId = GetMember(cached.Record, "Id") as string;
                 int recoveryUntil;
                 if (!string.IsNullOrWhiteSpace(targetId) &&
@@ -2526,12 +2525,21 @@ namespace EnRAGECompanionsExtension
 
             // enRAGE's paired incapacitation native owns the recovery animation/state transition.
             // Do not substitute TASK_STAND_UP, set health manually, or resurrect ordinary deaths.
-            bool nativeStarted = TryInvokeNativeWrapper(typeof(PED), "_INCAPACITATED_REVIVE",
-                new object[] { ped.Handle, helperPed.Handle });
+            bool nativeStarted = false;
+            try
+            {
+                // PED::_INCAPACITATED_REVIVE (0xF6262491C7704A63, Ped, Ped).
+                Function.Call(0xF6262491C7704A63UL,
+                    new InputArgument[] { ped.Handle, helperPed.Handle });
+                nativeStarted = true;
+            }
+            catch (Exception ex)
+            {
+                Log("Native _INCAPACITATED_REVIVE failed for " + id + ": " + Unwrap(ex));
+            }
             if (!nativeStarted)
             {
                 InvokeInstance(instance, "ShowSubtitle", T("incapacitated.revive_unavailable"));
-                Log("enRAGE _INCAPACITATED_REVIVE could not start for " + id + ".");
                 return false;
             }
 
@@ -4718,12 +4726,10 @@ namespace EnRAGECompanionsExtension
             }
 
             int recoveryUntil;
-            bool recoveryWindowExpired = false;
             if (!string.IsNullOrWhiteSpace(id) && RecoveryAnimationUntilById.TryGetValue(id, out recoveryUntil))
             {
                 if (Game.GameTime < recoveryUntil) return true;
                 RecoveryAnimationUntilById.Remove(id);
-                recoveryWindowExpired = true;
             }
 
             CompanionPersistentState state = GetPersistentState(record, true);
@@ -4892,17 +4898,10 @@ namespace EnRAGECompanionsExtension
         {
             if (ped == null || !ped.Exists()) return false;
             CachedRosterRecord cached;
-            if (!RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cached) || cached == null || cached.Record == null)
-            {
-                if (_woundedDown == null) try { return ped.IsIncapacitated; } catch { }
+            if (!RosterRecordsByPedHandle.TryGetValue(ped.Handle, out cached) ||
+                cached == null || cached.Record == null)
                 return false;
-            }
-            if (IsNativeWoundedDown(_latestMainInstance, ped)) return true;
-            CompanionPersistentState state = GetPersistentState(cached.Record, false);
-            if (state != null && state.Injury != null && state.Injury.IsIncapacitated)
-                return !ped.IsDead || IsNativeWoundedDown(_latestMainInstance, ped);
-            if (_woundedDown == null) try { return ped.IsIncapacitated; } catch { }
-            return false;
+            return IsNativeWoundedDown(_latestMainInstance, ped);
         }
         private static bool TryEnterIncapacitated(object instance, object record, Ped ped)
         {
