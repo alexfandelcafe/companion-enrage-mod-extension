@@ -4684,9 +4684,13 @@ namespace EnRAGECompanionsExtension
 
         private static void ForgetRecruitPedTracking(Ped ped, string id)
         {
-            if (ped != null && ped.Exists())
+            int handle = 0;
+            if (ped != null)
             {
-                int handle = ped.Handle;
+                try { handle = ped.Handle; } catch { }
+            }
+            if (handle != 0)
+            {
                 RosterRecordsByPedHandle.Remove(handle);
                 AppliedPromptNames.Remove(handle);
                 CustomCompanionCombatTargets.Remove(handle);
@@ -4734,7 +4738,9 @@ namespace EnRAGECompanionsExtension
             if (record == null || IsExiledRosterRecord(record)) return false;
             Ped ped = GetField(companion, "Ped") as Ped;
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
-            if (ped == null || !ped.Exists() || ped.IsDead || IsNativeWoundedDown(instance, ped))
+            if (GetMember(record, "IsAlive") is bool alive && !alive)
+                return false;
+            if (ped != null && ped.Exists() && (ped.IsDead || IsNativeWoundedDown(instance, ped)))
                 return false;
             CompanionPersistentState persistent = GetPersistentState(record, false);
             if (persistent != null && persistent.Injury != null && persistent.Injury.IsIncapacitated)
@@ -4743,8 +4749,6 @@ namespace EnRAGECompanionsExtension
             string id = GetMember(record, "Id") as string;
             string name = GetMember(record, "Name") as string ?? GetField(companion, "Name") as string ?? "Tu aliado";
             Ped horse = GetField(companion, "Horse") as Ped;
-            bool preserveHorse = false;
-            try { preserveHorse = ped.IsOnMount && horse != null && horse.Exists(); } catch { }
 
             UnregisterEscapedRosterMember(instance, record);
             SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
@@ -4753,13 +4757,16 @@ namespace EnRAGECompanionsExtension
             // clear the active flee/head-home task or delete a clone. Do not issue any new task.
             try { InvokeInstance(instance, "RestoreReal", companion); }
             catch (Exception ex) { Log("Escaped companion restore warning: " + Unwrap(ex)); }
-            if (preserveHorse) SetField(companion, "Horse", null);
+            if (horse != null && horse.Exists()) SetField(companion, "Horse", null);
             SetField(companion, "Ped", null);
             SetField(companion, "Real", null);
             try { InvokeInstance(instance, "Cleanup", companion); }
             catch (Exception ex) { Log("Escaped companion wrapper cleanup warning: " + Unwrap(ex)); }
-            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
-            try { PED.REMOVE_PED_FROM_GROUP(ped.Handle); } catch { }
+            if (ped != null && ped.Exists())
+            {
+                try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+                try { PED.REMOVE_PED_FROM_GROUP(ped.Handle); } catch { }
+            }
 
             IList companions = GetField(instance, "_comps") as IList;
             if (companions != null)
