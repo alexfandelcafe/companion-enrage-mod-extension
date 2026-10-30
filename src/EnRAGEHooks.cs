@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -115,6 +115,8 @@ namespace EnRAGECompanionsExtension
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, string> AutoAssistTargetByHelperId =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> LowHealthRideSuppressedIds =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> LastAutoAssistMoveAtByHelperId =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, int> RecoveryAnimationUntilById =
@@ -454,7 +456,7 @@ namespace EnRAGECompanionsExtension
             SetField(__instance, "_companionsOffDone", true);
         }
 
-        private static bool CompanionMovementOrderPrefix(object __instance, object[] __args)
+        private static bool CompanionMovementOrderPrefix(object __instance, object[] __args, MethodBase __originalMethod)
         {
             try
             {
@@ -466,13 +468,57 @@ namespace EnRAGECompanionsExtension
 
                 object record = GetField(companion, "Rec");
                 CompanionPersistentState state = GetPersistentState(record, false);
-                if (state == null) return true;
                 NormalizeRemovedWaitState(state);
-                if (state.Injury != null && state.Injury.IsIncapacitated)
+                if (state != null && state.Injury != null && state.Injury.IsIncapacitated)
                     return false;
+
+                Ped ped = GetField(companion, "Ped") as Ped;
+                if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+                if (ped == null || !ped.Exists() || ped.IsDead)
+                    return true;
+
+                EnableNativeIncapacitation(ped);
+                bool isRide = __originalMethod != null &&
+                    string.Equals(__originalMethod.Name, "Ride", StringComparison.Ordinal);
+                if (isRide)
+                {
+                    int health = 0, maxHealth = 1;
+                    try { health = ped.Health; } catch { }
+                    try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
+                    string id = GetMember(record, "Id") as string;
+                    bool belowEnRageHurtThreshold = health > 0 &&
+                        health < (int)Math.Ceiling(maxHealth * 0.30);
+                    if (belowEnRageHurtThreshold && !IsNativeWoundedDown(__instance, ped))
+                    {
+                        if (!string.IsNullOrWhiteSpace(id) && LowHealthRideSuppressedIds.Add(id))
+                            Log("Suppressed enRAGE low-health flee for recruit " + id +
+                                " until native incapacitation can take over.");
+                        // NemesisMod.Ride sends every companion below 30% health home before
+                        // RDR2 can enter the incapacitated state. Keep its task cycle alive,
+                        // but do not let that branch turn a wound into a flee/departure.
+                        return false;
+                    }
+                    if (!string.IsNullOrWhiteSpace(id))
+                        LowHealthRideSuppressedIds.Remove(id);
+                }
             }
             catch (Exception ex) { Log("Companion movement order guard warning: " + Unwrap(ex)); }
             return true;
+        }
+
+        private static void EnableNativeIncapacitation(Ped ped)
+        {
+            if (ped == null || !ped.Exists() || ped.IsDead) return;
+            try
+            {
+                // PED.SET_PED_CAN_BE_INCAPACITATED(Ped, BOOL).
+                Function.Call(0x5240864E847C691CUL,
+                    new InputArgument[] { ped.Handle, true });
+            }
+            catch (Exception ex)
+            {
+                Log("Could not enable native incapacitation for ped " + ped.Handle + ": " + Unwrap(ex));
+            }
         }
 
         private static void CompanionCyclePostfix(object __instance, object[] __args)
@@ -511,6 +557,8 @@ namespace EnRAGECompanionsExtension
                 {
                     if (companion == null) continue;
                     NormalizeRemovedWaitState(GetPersistentState(GetField(companion, "Rec"), false));
+                    if (ReleaseEscapedCompanion(__instance, companion))
+                        continue;
                     if (MaintainCompanionCondition(__instance, companion, player))
                     {
                         MaintainExtensionCompanionDamageability(companion, player);
@@ -2956,6 +3004,7 @@ namespace EnRAGECompanionsExtension
                 }
 
                 string why = __args[1] as string;
+                bool quiet = __args[2] is bool quietValue && quietValue;
                 if (string.Equals(why, "back at camp", StringComparison.OrdinalIgnoreCase))
                 {
                     // Extension recruits do not have a real camp. Prevent Ride from treating the
@@ -2965,10 +3014,22 @@ namespace EnRAGECompanionsExtension
                     return false;
                 }
 
-                // Any attempt to send this extension-only companion to a story camp is instead a
-                // normal dismissal. The persistent roster record is deliberately retained.
-                DismissRecruitedCompanion(__instance, companion);
-                return false;
+                // The actual player dismissal is handled by AskPrefix. Quiet enRAGE lifecycle
+                // cleanup should also preserve the recruited roster entry.
+                if (quiet || string.Equals(why, "you sent him home", StringComparison.OrdinalIgnoreCase))
+                {
+                    DismissRecruitedCompanion(__instance, companion);
+                    return false;
+                }
+
+                // Other SendHome calls are enRAGE departures, not the player's normal dismissal.
+                // Remove faction membership first, then let enRAGE run its own HeadHome/Flee task.
+                UnregisterEscapedRosterMember(__instance, recruitedRecord);
+                Ped departingPed = GetField(companion, "Ped") as Ped;
+                if (departingPed == null || !departingPed.Exists())
+                    departingPed = GetField(companion, "Real") as Ped;
+                ForgetRecruitPedTracking(departingPed, GetMember(recruitedRecord, "Id") as string);
+                return true;
             }
             catch (Exception ex)
             {
@@ -3119,6 +3180,7 @@ namespace EnRAGECompanionsExtension
                 AmbientReleasedWanderAt.Remove(ped.Handle);
                 try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
                 adopt.Invoke(__instance, new object[] { companion, ped, player });
+                EnableNativeIncapacitation(ped);
                 // A previously dismissed member had non-temporary ambient events blocked to stop
                 // panic/retaliation while off duty. Clear that passive state while this NPC is an
                 // active companion; Setup owns his follow/combat tasks until dismissal again.
@@ -4505,6 +4567,151 @@ namespace EnRAGECompanionsExtension
             return null;
         }
 
+        private static bool UnregisterEscapedRosterMember(object instance, object record)
+        {
+            if (instance == null || record == null) return false;
+            string id = GetMember(record, "Id") as string;
+            string gang = GetMember(record, "Gang") as string;
+            string formerGang = !string.IsNullOrWhiteSpace(gang) ? gang :
+                GetMember(record, "FormerGang") as string;
+            if (string.IsNullOrWhiteSpace(formerGang))
+                formerGang = string.Equals(id, null, StringComparison.Ordinal) ? _recruitGangId : _recruitGangId;
+
+            bool changed = false;
+            if (!string.IsNullOrWhiteSpace(formerGang) && !string.Equals(gang, formerGang, StringComparison.OrdinalIgnoreCase))
+                changed |= SetMember(record, "FormerGang", formerGang);
+            if (!string.IsNullOrWhiteSpace(gang))
+                changed |= SetMember(record, "Gang", null);
+            changed |= SetMember(record, "BossId", null);
+            changed |= SetMember(record, "CampId", null);
+            changed |= SetMember(record, "CampKnown", false);
+            changed |= SetMember(record, "Affiliation", null);
+
+            IList storyRoster = GetMember(instance, "StoryRoster") as IList;
+            if (storyRoster != null)
+            {
+                foreach (object member in storyRoster.Cast<object>().ToArray())
+                {
+                    if (!object.ReferenceEquals(member, record) &&
+                        (string.IsNullOrWhiteSpace(id) ||
+                         !string.Equals(GetMember(member, "Id") as string, id, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    string memberGang = GetMember(member, "Gang") as string;
+                    string memberFormerGang = !string.IsNullOrWhiteSpace(memberGang) ? memberGang : formerGang;
+                    if (!string.IsNullOrWhiteSpace(memberFormerGang))
+                        SetMember(member, "FormerGang", memberFormerGang);
+                    SetMember(member, "Gang", null);
+                    SetMember(member, "BossId", null);
+                    SetMember(member, "CampId", null);
+                    SetMember(member, "CampKnown", false);
+                    SetMember(member, "Affiliation", null);
+                    storyRoster.Remove(member);
+                    changed = true;
+                }
+            }
+
+            SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
+            if (changed)
+            {
+                try { InvokeInstance(instance, "SaveRoster"); }
+                catch (Exception ex) { Log("Saving roster after companion escape failed: " + Unwrap(ex)); }
+            }
+            Log("Unregistered escaped companion from faction roster: " +
+                (GetMember(record, "Name") as string ?? id ?? "(unknown)") + "; it can be recruited again later.");
+            return changed;
+        }
+
+        private static void ForgetRecruitPedTracking(Ped ped, string id)
+        {
+            if (ped != null && ped.Exists())
+            {
+                int handle = ped.Handle;
+                RosterRecordsByPedHandle.Remove(handle);
+                AppliedPromptNames.Remove(handle);
+                CustomCompanionCombatTargets.Remove(handle);
+                CustomCombatSuppressedAt.Remove(handle);
+                AmbientReleasedRecruitPeds.Remove(handle);
+                AmbientReleasedWanderAt.Remove(handle);
+                if (_incapacitatedPromptFor == handle) HideIncapacitatedPrompt();
+                if (_medicinePromptFor == handle) HideRecruitMedicinePrompt();
+                if (_combatStancePromptFor == handle) HideCombatStancePrompt();
+                if (_genericPromptFor == handle) HideGenericRecruitPrompt();
+            }
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                RecruitedRosterModels.Remove(id);
+                LowHealthRideSuppressedIds.Remove(id);
+                LastObservedHealthById.Remove(id);
+                LastDamageBaselineById.Remove(id);
+                LastDamageAtById.Remove(id);
+                LastHealthSampleAtById.Remove(id);
+                LastInjuryRecoveryAtById.Remove(id);
+                LastInjuryPersistAtById.Remove(id);
+                LastAutoAssistAtById.Remove(id);
+                RecoveryAnimationUntilById.Remove(id);
+                foreach (string helperId in AutoAssistTargetByHelperId
+                    .Where(pair => string.Equals(pair.Value, id, StringComparison.OrdinalIgnoreCase))
+                    .Select(pair => pair.Key).ToArray())
+                {
+                    AutoAssistTargetByHelperId.Remove(helperId);
+                    LastAutoAssistMoveAtByHelperId.Remove(helperId);
+                }
+                AutoAssistTargetByHelperId.Remove(id);
+                LastAutoAssistMoveAtByHelperId.Remove(id);
+            }
+        }
+
+        private static bool ReleaseEscapedCompanion(object instance, object companion)
+        {
+            if (instance == null || companion == null) return false;
+            string key = GetField(companion, "Key") as string;
+            if (string.IsNullOrWhiteSpace(key) || !key.StartsWith(KeyPrefix, StringComparison.Ordinal) ||
+                GetFieldInt(companion, "State", -1) != 2)
+                return false;
+
+            object record = GetField(companion, "Rec");
+            if (record == null || IsExiledRosterRecord(record)) return false;
+            Ped ped = GetField(companion, "Ped") as Ped;
+            if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
+            if (ped == null || !ped.Exists() || ped.IsDead || IsNativeWoundedDown(instance, ped))
+                return false;
+            CompanionPersistentState persistent = GetPersistentState(record, false);
+            if (persistent != null && persistent.Injury != null && persistent.Injury.IsIncapacitated)
+                return false;
+
+            string id = GetMember(record, "Id") as string;
+            string name = GetMember(record, "Name") as string ?? GetField(companion, "Name") as string ?? "Tu aliado";
+            Ped horse = GetField(companion, "Horse") as Ped;
+            bool preserveHorse = false;
+            try { preserveHorse = ped.IsOnMount && horse != null && horse.Exists(); } catch { }
+
+            UnregisterEscapedRosterMember(instance, record);
+            SetPersistentFollowState(record, CompanionFollowState.Dismissed, null);
+
+            // Restore the NPC's saved settings, but detach it from Cleanup before Cleanup can
+            // clear the active flee/head-home task or delete a clone. Do not issue any new task.
+            try { InvokeInstance(instance, "RestoreReal", companion); }
+            catch (Exception ex) { Log("Escaped companion restore warning: " + Unwrap(ex)); }
+            if (preserveHorse) SetField(companion, "Horse", null);
+            SetField(companion, "Ped", null);
+            SetField(companion, "Real", null);
+            try { InvokeInstance(instance, "Cleanup", companion); }
+            catch (Exception ex) { Log("Escaped companion wrapper cleanup warning: " + Unwrap(ex)); }
+            try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
+            try { PED.REMOVE_PED_FROM_GROUP(ped.Handle); } catch { }
+
+            IList companions = GetField(instance, "_comps") as IList;
+            if (companions != null)
+            {
+                try { companions.Remove(companion); } catch { }
+            }
+            ForgetRecruitPedTracking(ped, id);
+            ModelHashes.Remove(key);
+            Log("Released fleeing/returning companion " + name +
+                " from extension control without interrupting its current task.");
+            return true;
+        }
+
         private static void DismissRecruitedCompanion(object instance, object companion)
         {
             if (companion == null) return;
@@ -4530,6 +4737,7 @@ namespace EnRAGECompanionsExtension
             LastDamageAtById.Remove(dismissedId);
             LastHealthSampleAtById.Remove(dismissedId);
             LastInjuryRecoveryAtById.Remove(dismissedId);
+            LowHealthRideSuppressedIds.Remove(dismissedId);
 
             // Restore the NPC's pre-companion health, weapons, flags and combat settings before
             // removing enRAGE's companion wrapper. A clone is explicitly detached from Cleanup's
@@ -4592,9 +4800,7 @@ namespace EnRAGECompanionsExtension
             if (ped == null || !ped.Exists()) ped = GetField(companion, "Real") as Ped;
             if (ped == null || !ped.Exists() || ped.IsDead) return;
 
-            int state = GetFieldInt(companion, "State", -1), health = 0, maxHealth = 1;
-            try { health = ped.Health; } catch { }
-            try { maxHealth = Math.Max(1, ped.MaxHealth); } catch { }
+            EnableNativeIncapacitation(ped);
             CompanionPersistentState persistent = GetPersistentState(GetField(companion, "Rec"), false);
             bool isPersistentlyIncapacitated = persistent != null && persistent.Injury != null &&
                 persistent.Injury.IsIncapacitated;
@@ -4612,24 +4818,6 @@ namespace EnRAGECompanionsExtension
                 }
             }
             try { ENTITY.SET_ENTITY_INVINCIBLE(ped.Handle, false); } catch { }
-            if (state == 2 && health > 0 &&
-                health < (int)Math.Ceiling(maxHealth * 0.30))
-            {
-                try { TASK.CLEAR_PED_TASKS(ped.Handle, true, false); } catch { }
-                try
-                {
-                    if (player != null && player.Exists())
-                    {
-                        int group = PED.GET_PED_GROUP_INDEX(player.Handle);
-                        if (group > 0 && !PED.IS_PED_GROUP_MEMBER(ped.Handle, group, false))
-                            PED.SET_PED_AS_GROUP_MEMBER(ped.Handle, group);
-                    }
-                }
-                catch { }
-                SetField(companion, "State", 0);
-                SetField(companion, "AskedAt", Game.GameTime);
-                try { ped.BlockPermanentEvents = false; } catch { }
-            }
         }
 
         private static bool MaintainCompanionCondition(object instance, object companion, Ped player)
