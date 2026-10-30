@@ -46,6 +46,7 @@ recruit.success.approaching={0} fue llamado y se acerca para seguirte.
 companion.default=Tu compañero
 companion.ally=Tu aliado
 companion.dismissed={0} deja de seguirte y vuelve a comportarse como un NPC del mundo.
+companion.escaped={0} huyó y dejó de formar parte de tu banda.
 companion.recruited={0} ahora combate de tu lado.
 injury.detected={0} está herido. Un remedio ayudará a recuperarlo.
 incapacitated.only_help=Está incapacitado por una herida. Apúntale y mantén E para ayudarlo a levantarse.
