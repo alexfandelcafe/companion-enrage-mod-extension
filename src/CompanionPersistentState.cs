@@ -124,11 +124,6 @@ namespace EnRAGECompanionsExtension
         [DataMember(Order = 2)] public int Severity { get; set; }
         [DataMember(Order = 3)] public double RecoverySecondsRemaining { get; set; }
         [DataMember(Order = 4)] public long FirstInjuredUtcTicks { get; set; }
-        // Downed/incapacitated is distinct from a confirmed death. Keep it across script reloads
-        // so a companion does not get permanently removed from the roster merely for falling.
-        [DataMember(Order = 5)] public bool IsIncapacitated { get; set; }
-        [DataMember(Order = 6)] public long IncapacitatedSinceUtcTicks { get; set; }
-
         public void Normalize()
         {
             Severity = Severity < 0 ? 0 : (Severity > 100 ? 100 : Severity);
@@ -138,21 +133,11 @@ namespace EnRAGECompanionsExtension
             if (RecoverySecondsRemaining > 604800) RecoverySecondsRemaining = 604800;
             if (FirstInjuredUtcTicks < 0 || FirstInjuredUtcTicks > DateTime.MaxValue.Ticks)
                 FirstInjuredUtcTicks = 0;
-            if (IncapacitatedSinceUtcTicks < 0 || IncapacitatedSinceUtcTicks > DateTime.MaxValue.Ticks)
-                IncapacitatedSinceUtcTicks = 0;
-            if (IsIncapacitated)
-            {
-                IsInjured = true;
-                if (Severity < 40) Severity = 40;
-                if (FirstInjuredUtcTicks == 0) FirstInjuredUtcTicks = DateTime.UtcNow.Ticks;
-                if (IncapacitatedSinceUtcTicks == 0) IncapacitatedSinceUtcTicks = DateTime.UtcNow.Ticks;
-            }
             if (!IsInjured)
             {
                 Severity = 0;
                 RecoverySecondsRemaining = 0;
                 FirstInjuredUtcTicks = 0;
-                IncapacitatedSinceUtcTicks = 0;
             }
         }
     }
