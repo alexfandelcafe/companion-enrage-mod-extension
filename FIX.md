@@ -145,16 +145,15 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 - El esquema anterior se sigue leyendo para conservar afinidad, postura, montura, posición y lesión. Los estados antiguos `Resting` se normalizan a seguimiento; el temporizador de descanso se ignora. Los campos retirados no se vuelven a guardar y los archivos auxiliares de versiones anteriores se ignoran.
 - El almacén se inicializa desde `EntryPoint`; el guardado de migración se realiza solo si hay cambios.
 
-### Fase 3 — órdenes individuales y espera
+### Fase 3 — retirada de las órdenes contextuales de espera
 
-- Las órdenes individuales aparecen como prompts contextuales solo al apuntar al ped exacto de un recluta activo y no expulsado. La orden de descanso y el sistema de incapacitación/recuperación se retiraron; E ya no se reserva para reanimar reclutas.
-- `Quédate aquí` guarda coordenadas por ID estable de roster, aplica la tarea de anclaje inmediatamente y evita entrar en el estado `Ride` de enRAGE. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
-- `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
-- Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
-- Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` al INI autogenerado y al ejemplo. El código decompilado identifica `RegardOfRecord(NemesisRecord)` como el valor nativo del roster de historia para la relación hacia el jugador; el hook adapta la afinidad persistente 0–100 a esa escala nativa de -100..100 para los reclutas de la extensión, sin dibujar una barra paralela. La presentación final requiere verificación dentro del juego.
+- Se retiraron el prompt de `Quédate aquí`/`Sígueme`, las órdenes individuales contextuales y el prompt manual de recuperación con E. El seguimiento vuelve a depender del ciclo normal de enRAGE.
+- Los estados persistidos `Waiting` y `ReturningToPosition` se normalizan a `Following` al cargar. Las claves antiguas `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se eliminan del INI al iniciar.
+- Al llamar desde la ficha no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento; enRAGE conserva sus tareas de aproximación/seguimiento.
+- El hook adapta la afinidad persistente 0–100 a la escala nativa de -100..100 mediante `RegardOfRecord(NemesisRecord)`, sin dibujar una barra paralela. La presentación final requiere verificación dentro del juego.
 - Los registros de extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE y no es neutral. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
 
-### Fase 4 — heridas e incapacitación
+### Fase 4 — heridas y remedios
 
 - El controlador fuerza la vulnerabilidad de los reclutas de la extensión frente al estado invulnerable que asignaba enRAGE al adoptar compañeros; evita además que un recluta de poca salud se quede en el estado `GoingHome` de enRAGE. Las lesiones se registran al superar `InjuryDamageThresholdPercent` de pérdida acumulada desde el baseline de salud. Cada lesión tiene gravedad y tiempo de recuperación por ID estable.
 - La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
@@ -175,7 +174,7 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 
 ### Pendiente y verificación
 
-No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática de la fuente confirma la existencia de todos los hooks nuevos y el balance de llaves y paréntesis. Aun así, falta probar dentro de RDR2 que la API instalada exponga los wrappers de `TASK_GO_STRAIGHT_TO_COORD` y `TASK_STAND_STILL` con las firmas que espera la orden, y que un compañero que regresa al roster vuelva a seguir tanto a pie como montado. No se ha compilado ni verificado dentro del juego.
+No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno, por lo que no se pudo generar ni ejecutar el ensamblado. La revisión estática confirma las rutas de muerte, escape, nombres nativos, afinidad y remedios a nivel de fuente. Aun así, falta compilar y probar dentro de RDR2 que un recluta muerto quede como fallecido sin reaparecer, que un recluta que huye se libere sin quedar bajo control de la extensión y que los compañeros vivos sigan funcionando a pie y montados.
 
 
 ### Endurecimiento adicional — tratamiento, reincorporación y recuperación del JSON
@@ -183,7 +182,7 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 - El tratamiento pagado ahora comprueba que la salud se haya aplicado realmente al ped vivo. Si no se confirma, intenta devolver el coste usando la firma de incremento de efectivo encontrada en el código decompilado de enRAGE; si la devolución falla, deja un error explícito en el log en lugar de anunciar un tratamiento exitoso.
 - El flujo de roster marca al recluta como fallecido cuando el juego confirma que el ped murió.
 - La carga del estado persistente intenta recuperar `EnRAGECompanionsExtension.companions.json.bak` cuando falta el archivo principal o no puede deserializarse. La copia primaria ilegible se conserva como archivo de cuarentena antes de restaurar el backup, cuando el sistema de archivos lo permite.
-- Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo, el levantamiento y la recuperación tras un JSON corrupto.
+- Esto es una revisión estática del flujo de error. No se ha compilado ni probado dentro de RDR2; hay que comprobar in-game el reembolso ante fallo y la recuperación tras un JSON corrupto.
 
 
 - **Limitación pendiente de detección de daño:** el controlador utiliza un baseline acumulado de salud y un umbral configurable, pero no atribuye exhaustivamente cada pérdida al jugador, a un NPC hostil, a una caída o al entorno. Esta distinción requiere una API de atribución de daño fiable y una prueba dentro de la versión objetivo.
@@ -192,8 +191,8 @@ No hay compilador C#/MSBuild ni `ScriptHookRDRNetAPI.dll` local en este entorno,
 ## Corrección actual — afinidad por interacciones y retirada de la orden de espera
 
 - La afinidad persistente responde a interacciones nativas: cuando RDR2 identifica al recluta como objetivo, saludar suma 2 y provocar resta 3. Un recluta cercano al que se detecte un empujón o ataque físico pierde 5. Si el recluta objetivo pierde salud dentro de una breve ventana tras un disparo del jugador, pierde 8; esto es una heurística temporal, no una atribución nativa confirmada del origen del daño. Las acciones tienen limitación temporal por registro para evitar contabilizarlas cada frame.
-- Se retiró del ciclo del juego el prompt contextual de `Quédate aquí`/`Sígueme`, pero se conserva y restaura el prompt manual de recuperación con E para levantar a un recluta incapacitado por herida. Los valores antiguos `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se quitan del INI al cargar la extensión; los estados persistentes `Waiting`/ `ReturningToPosition` se migran a `Following`.
-- Se retiró por completo la caída artificial. El ciclo solo bloquea `WaitToJoin`/`Ride` mientras el estado nativo `WoundedDown` o su animación física permanezcan activos. El prompt E desaparece al levantarse; E y la ayuda automática invocan el native emparejado de recuperación. Estos cambios requieren compilación y prueba en RDR2.
+- Se retiraron del ciclo el prompt de espera `Quédate aquí`/`Sígueme` y el prompt de recuperación con E. Los valores antiguos `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` se quitan del INI al cargar la extensión; los estados persistentes `Waiting`/`ReturningToPosition` se migran a `Following`.
+- El ciclo no bloquea `WaitToJoin`/`Ride` por un estado `WoundedDown`, no aplica invulnerabilidad de rescate ni llama a un native de reanimación. `ReleaseEscapedCompanion` conserva la tarea de huida/regreso de enRAGE y desacopla el wrapper. Una muerte confirmada marca `IsAlive=false`; `SpawnCompanion` rechaza los registros fallecidos para evitar crear un sustituto. Estos cambios requieren compilación y prueba en RDR2.
 - Revisión de código fuente únicamente. No se pudo compilar ni probar dentro de RDR2 en este entorno; verificar en el juego que saludo/provocación ajusten el medidor correcto y que los compañeros sigan normalmente después de cargar estados antiguos.
 
 
