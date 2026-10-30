@@ -147,14 +147,14 @@ Esta comprobación está implementada a nivel de código fuente; sigue pendiente
 
 ### Fase 3 — órdenes individuales y espera
 
-- Las órdenes individuales aparecen como prompts contextuales solo al apuntar al ped exacto de un recluta activo y no expulsado. `Quédate aquí`/`Sígueme` usa F; E se reserva para ayudar a levantarse estando incapacitado. Mientras espera, el wrapper conserva `State=1`, y los hooks de `WaitToJoin`/`Ride` impiden que la IA de enRAGE sobrescriba el anclaje. Al expulsar al miembro se eliminan los prompts contextuales activos. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
+- Las órdenes individuales aparecen como prompts contextuales solo al apuntar al ped exacto de un recluta activo y no expulsado. `Quédate aquí`/`Sígueme` usa F; las posturas de combate y el remedio conservan sus propios controles contextuales. Mientras espera, el wrapper conserva `State=1`, y los hooks de `WaitToJoin`/`Ride` impiden que la IA de enRAGE sobrescriba el anclaje. Al expulsar al miembro se eliminan los prompts contextuales activos. La orden de descanso se retiró tras un cierre del juego reportado al activarla.
 - `Quédate aquí` guarda coordenadas por ID estable de roster, aplica la tarea de anclaje inmediatamente y evita entrar en el estado `Ride` de enRAGE. Si el NPC se aleja más de `WaitRadius`, se le envía de vuelta al anclaje; si está montado, se le ordena desmontar.
 - `Sígueme` elimina el anclaje, limpia la tarea de espera y reactiva el ciclo normal de enRAGE.
 - Al llamar desde la ficha ya no se lanza una tarea manual de montar después de `Adopt`, porque podía interrumpir el seguimiento. Para un ped existente se restablece `State=0` (`WaitToJoin`); para un reemplazo creado mediante `SpawnCompanion` se conserva el estado inicial asignado por enRAGE.
 - Se agregaron las claves `EnableIndividualOrders`, `EnableWaitMode` y `WaitRadius` al INI autogenerado y al ejemplo. El código decompilado identifica `RegardOfRecord(NemesisRecord)` como el valor nativo del roster de historia para la relación hacia el jugador; el hook adapta la afinidad persistente 0–100 a esa escala nativa de -100..100 para los reclutas de la extensión, sin dibujar una barra paralela. La presentación final requiere verificación dentro del juego.
 - Los registros de extensión con `TimesKilledPlayer=0` usan `Origin=Greeted` y `CanHunt=false`: `GangMember` fuerza `Intent.Hunts` en enRAGE y no es neutral. Si el contador registra una muerte real, el historial se conserva. Las rutas de reclutamiento, roster, expulsión confirmable y remedio no se sustituyen.
 
-### Fase 4 — heridas e incapacitación
+### Fase 4 — heridas y remedios
 
 - El controlador fuerza la vulnerabilidad de los reclutas de la extensión frente al estado invulnerable que asignaba enRAGE al adoptar compañeros; evita además que un recluta de poca salud se quede en el estado `GoingHome` de enRAGE. Las lesiones se registran al superar `InjuryDamageThresholdPercent` de pérdida acumulada desde el baseline de salud. Cada lesión tiene gravedad y tiempo de recuperación por ID estable.
 - La recuperación avanza en intervalos y se persiste periódicamente; no se guarda el JSON cada frame.
