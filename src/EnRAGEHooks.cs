@@ -3457,6 +3457,23 @@ namespace EnRAGECompanionsExtension
         {
             if (ped == null || !ped.Exists()) return true;
 
+            // The station clerks/workers use several different model hashes across towns. Check
+            // hashes first: Models.Name() can return an empty string for models absent from its enum.
+            uint modelHash = unchecked((uint)ped.Model.Hash);
+            switch (modelHash)
+            {
+                case 0xE9694F3F: // S_M_M_TrainStationWorker_01
+                case 0x2AB8094F: // U_M_M_ArmTrainStationWorker_01
+                case 0xD3A41495: // U_M_M_BlWTrainStationWorker_01
+                case 0x3F0EC349: // U_M_M_RhdTrainStationWorker_01
+                case 0x6712F25D: // U_M_M_TumTrainStationWorker_01
+                case 0xC606A445: // U_M_M_VhtStationClerk_01
+                case 0x1173F849: // U_M_M_StrFreightStationOwner_01
+                case 0xABC22ABF: // U_M_O_RigTrainStationWorker_01
+                case 0xE02AEA58: // S_M_M_SDTicketSeller_01
+                    return true;
+            }
+
             string modelName = null;
             try
             {
@@ -3484,11 +3501,15 @@ namespace EnRAGECompanionsExtension
             if (string.IsNullOrWhiteSpace(modelName)) return false;
             modelName = modelName.Trim().ToLowerInvariant();
 
-            // Postal-service model naming varies across RDR2 builds and model lists.
+            // Keep a name-based fallback for model names that enRAGE can resolve.
             return modelName.Contains("postmaster") || modelName.Contains("postoffice") ||
                    modelName.Contains("post_office") || modelName.Contains("postal") ||
                    modelName.Contains("mailman") || modelName.Contains("mail_clerk") ||
-                   modelName.Contains("postalworker") || modelName.Contains("postal_worker");
+                   modelName.Contains("postalworker") || modelName.Contains("postal_worker") ||
+                   modelName.Contains("trainstationworker") || modelName.Contains("train_station_worker") ||
+                   modelName.Contains("stationclerk") || modelName.Contains("station_clerk") ||
+                   modelName.Contains("freightstationowner") || modelName.Contains("freight_station_owner") ||
+                   modelName.Contains("ticketseller") || modelName.Contains("ticket_seller");
         }
 
         private static bool IsAskBlocked(object instance)
