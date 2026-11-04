@@ -39,6 +39,7 @@ namespace EnRAGECompanionsExtension
         private static MethodInfo _updateInterrogation;
         private static MethodInfo _companionFight;
         private static MethodInfo _modelFemale;
+        private static MethodInfo _modelName;
         private static bool _loggedMissingModelGender;
         private static MethodInfo _uiDrawForeverString;
         private static Type _rosterMenuType;
@@ -144,6 +145,9 @@ namespace EnRAGECompanionsExtension
                     p => p[0].ParameterType.Name == "Companion" && IsPedType(p[1].ParameterType));
                 Type modelsType = _mainType.Assembly.GetType("NemesisSystem.Models", false);
                 _modelFemale = FindMethod(modelsType, "Female", 1, p =>
+                    p[0].ParameterType == typeof(uint) || p[0].ParameterType == typeof(int) ||
+                    p[0].ParameterType == typeof(long) || p[0].ParameterType == typeof(ulong));
+                _modelName = FindMethod(modelsType, "Name", 1, p =>
                     p[0].ParameterType == typeof(uint) || p[0].ParameterType == typeof(int) ||
                     p[0].ParameterType == typeof(long) || p[0].ParameterType == typeof(ulong));
                 _rosterMenuType = _mainType.Assembly.GetType("NemesisSystem.RosterMenu", false);
@@ -583,7 +587,15 @@ namespace EnRAGECompanionsExtension
                     return;
                 }
 
-                if (!IsKickableRosterRecord(_latestMainInstance, record)) return;
+                if (!IsKickableRosterRecord(_latestMainInstance, record))
+                {
+                    __result.Remove("Echar de la banda");
+                    __result.Remove("Confirmar expulsión");
+                    __result.Remove("Cancelar expulsión");
+                    if (string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
+                        _pendingKickRosterRecordId = null;
+                    return;
+                }
                 if (string.Equals(_pendingKickRosterRecordId, id, StringComparison.OrdinalIgnoreCase))
                 {
                     int kickIndex = __result.IndexOf("Echar de la banda");
@@ -673,7 +685,17 @@ namespace EnRAGECompanionsExtension
                     return false;
                 }
 
-                if (!IsKickableRosterRecord(_latestMainInstance, record)) return true;
+                if (!IsKickableRosterRecord(_latestMainInstance, record))
+                {
+                    if (action == "Echar de la banda" || action == "Confirmar expulsión" || action == "Cancelar expulsión")
+                    {
+                        if (string.Equals(_pendingKickRosterRecordId, recordIdForConfirmation, StringComparison.OrdinalIgnoreCase))
+                            _pendingKickRosterRecordId = null;
+                        InvokeInstance(_latestMainInstance, "ShowSubtitle", "No puedes expulsar a un miembro original de la banda.");
+                        return false;
+                    }
+                    return true;
+                }
                 string id = GetMember(record, "Id") as string;
                 if (action == "Echar de la banda")
                 {
@@ -783,12 +805,20 @@ namespace EnRAGECompanionsExtension
             string id = GetMember(record, "Id") as string;
             if (string.IsNullOrWhiteSpace(id) || ExiledRosterIds.Contains(id)) return false;
 
+            // The story cast (Dutch, John, and other original characters) is never eligible for
+            // permanent expulsion. Extension recruits mirrored into StoryRoster have Story=false and
+            // extcomp_/extvdl_ IDs, so they remain eligible once dismissed.
+            bool extensionRecruit = IsRecruitedRosterRecord(record);
+            bool storyFlag = GetMember(record, "Story") is bool story && story;
+            if (!extensionRecruit && (IsBuiltInStoryRecordId(id) || storyFlag))
+                return false;
+
             // Never expel a member while its companion wrapper is active.
             if (IsRosterRecordCurrentlyFollowing(instance, record))
                 return false;
 
-            // Built-in story members remain kickable from the VDL story sheet, even when the
-            // configured recruitment faction is a regular custom faction.
+            // Extension recruits can be mirrored into the built-in VDL story sheet; other original
+            // story members have already been rejected above.
             IList storyRoster = GetMember(instance, "StoryRoster") as IList;
             if (storyRoster != null)
             {
@@ -1997,6 +2027,11 @@ namespace EnRAGECompanionsExtension
                 InvokeInstance(__instance, "ShowSubtitle", "Solo puedes reclutar NPC masculinos.");
                 return;
             }
+            if (IsProtectedRecruitmentModel(ped))
+            {
+                InvokeInstance(__instance, "ShowSubtitle", "Ese personaje está reservado para sus funciones originales y no puede ser reclutado.");
+                return;
+            }
             if (!IsConfiguredRecruitmentFactionAvailable())
             {
                 InvokeInstance(__instance, "ShowSubtitle", "La facción configurada '" + (_recruitGangId ?? "vdl") + "' no existe en enRAGE. Revisa RecruitGangId en el archivo INI.");
@@ -2659,7 +2694,7 @@ namespace EnRAGECompanionsExtension
         private static bool IsEligibleGenericCandidate(object instance, Ped player, Ped ped, bool directInteractionTarget = false)
         {
             if (_roleOf == null || player == null || !player.Exists() || ped == null || !ped.Exists() ||
-                ped.IsDead || !ped.IsHuman || !IsMalePed(ped) || ped.Handle == player.Handle || ped.IsHogtied ||
+                ped.IsDead || !ped.IsHuman || !IsMalePed(ped) || IsProtectedRecruitmentModel(ped) || ped.Handle == player.Handle || ped.IsHogtied ||
                 ped.IsInVehicle || ped.IsOnMount || PED.IS_PED_IN_COMBAT(ped.Handle, 0))
                 return false;
 
@@ -2706,6 +2741,50 @@ namespace EnRAGECompanionsExtension
             // ordinary, interactable civilians as mission entities; the explicit story/event,
             // lawman and GameOwned filters above are the safer exclusions.
             return true;
+        }
+
+        // Generic recruitment is intended for ambient pedestrians, not unique/story characters or
+        // town service NPCs such as post-office clerks. Model names come from enRAGE's own cache.
+        private static bool IsProtectedRecruitmentModel(Ped ped)
+        {
+            if (ped == null || !ped.Exists()) return true;
+
+            string modelName = null;
+            try
+            {
+                if (_modelName == null && _mainType != null)
+                {
+                    Type modelsType = _mainType.Assembly.GetType("NemesisSystem.Models", false);
+                    _modelName = FindMethod(modelsType, "Name", 1, p =>
+                        p[0].ParameterType == typeof(uint) || p[0].ParameterType == typeof(int) ||
+                        p[0].ParameterType == typeof(long) || p[0].ParameterType == typeof(ulong));
+                }
+                if (_modelName != null && _modelName.IsStatic)
+                {
+                    Type argumentType = _modelName.GetParameters()[0].ParameterType;
+                    object argument = Convert.ChangeType(unchecked((uint)ped.Model.Hash), argumentType);
+                    modelName = _modelName.Invoke(null, new[] { argument }) as string;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Recruitment model-name lookup warning: " + Unwrap(ex));
+            }
+
+            // If this enRAGE build cannot resolve a model name, leave the existing role/story checks
+            // in control rather than disabling recruitment for every ambient pedestrian.
+            if (string.IsNullOrWhiteSpace(modelName)) return false;
+            modelName = modelName.Trim().ToLowerInvariant();
+
+            // CS_* and U_M_* are character/unique models rather than ordinary ambient male peds.
+            // Also explicitly guard common postal-service naming variants across game builds.
+            if (modelName.StartsWith("cs_", StringComparison.Ordinal) ||
+                modelName.StartsWith("u_m_", StringComparison.Ordinal))
+                return true;
+
+            return modelName.Contains("postmaster") || modelName.Contains("postoffice") ||
+                   modelName.Contains("post_office") || modelName.Contains("postal") ||
+                   modelName.Contains("mail") || modelName.Contains("horatio");
         }
 
         private static bool IsAskBlocked(object instance)
