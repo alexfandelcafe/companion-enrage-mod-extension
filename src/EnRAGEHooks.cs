@@ -3451,8 +3451,8 @@ namespace EnRAGECompanionsExtension
             return true;
         }
 
-        // Generic recruitment is for ordinary ambient pedestrians, not postal-service NPCs or
-        // unique/cutscene models. Resolve names through the same enRAGE model catalog as gender checks.
+        // Generic recruitment is for ordinary ambient pedestrians, not postal-service NPCs.
+        // Resolve names through the same enRAGE model catalog as gender checks.
         private static bool IsProtectedRecruitmentModel(Ped ped)
         {
             if (ped == null || !ped.Exists()) return true;
